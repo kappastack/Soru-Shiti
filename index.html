@@ -2383,6 +2383,20 @@ function pickVictim(){ const pool=[];   // wandering adult civilian — never a 
   for(const r of residents) if(r.moving&&r.type!=='child'&&!r.claimed)pool.push(r);
   return pool.length?pool[(Math.random()*pool.length)|0]:null; }
 
+const RONIN_ROBE=['#2c2a30','#3a2c28','#26282e','#332420','#2a3028'];
+const RONIN_TRIM=['#3a2230','#4a1e1e','#2e1f30','#5a2a1a','#1f2a3a'];
+/* three readable archetypes — silhouette + headwear differ, not just color.
+   'lean': default ragged wild-haired ronin (existing look, kept as the common case).
+   'bulky': wider frame, cracked helmet, shoulder/chest armor plate.
+   'veteran': bound hachimaki, tied-back sleeve, a scar — reads as battle-worn, not feral. */
+function roninKit(base){
+  const r=Math.random(); const build = r<0.5?'lean' : r<0.78?'bulky' : 'veteran';
+  return Object.assign(base, { kind:'ronin', build,
+    skin:SKIN[(Math.random()*SKIN.length)|0],
+    col:RONIN_ROBE[(Math.random()*RONIN_ROBE.length)|0],
+    obi:RONIN_TRIM[(Math.random()*RONIN_TRIM.length)|0],
+    scar:(build==='veteran'&&Math.random()<0.6) }); }
+
 function spawnEncounter(){ if(!RONIN_VIOLENCE||encounters.length||!roadList.length)return;
   const vic=pickVictim(); if(!vic)return; const [vx,vy]=vpos(vic);
   const cx=Math.round(vx),cy=Math.round(vy);
@@ -2392,8 +2406,8 @@ function spawnEncounter(){ if(!RONIN_VIOLENCE||encounters.length||!roadList.leng
   for(let t=0;t<10;t++){ const r=roadList[(Math.random()*roadList.length)|0]; const d=Math.hypot(r[0]-cx,r[1]-cy); if(d>3&&d<bestd){bestd=d;edge=r;} }
   if(!edge)edge=roadList[(Math.random()*roadList.length)|0];
   const n=2+((Math.random()*3)|0); const mob=[];           // 2–4 ronin
-  for(let i=0;i<n;i++) mob.push({ kind:'ronin', x:edge[0]+(Math.random()-0.5), y:edge[1]+(Math.random()-0.5),
-    ph:Math.random()*6, dir:1, spd:1.5+Math.random()*0.5, skin:SKIN[(Math.random()*SKIN.length)|0], col:'#2c2a30', obi:'#3a2230' });
+  for(let i=0;i<n;i++) mob.push(roninKit({ x:edge[0]+(Math.random()-0.5), y:edge[1]+(Math.random()-0.5),
+    ph:Math.random()*6, dir:1, spd:1.5+Math.random()*0.5 }));
   encounters.push({ state:'approach', t:0, st:0, mob, vic, outcome:rollOutcome(), tx:cx, ty:cy }); }
 
 /* TEST/PvP: stage a ronin warband sacking a SPECIFIC plot — converge, slaughter (blood + dismemberment), disperse */
@@ -2404,9 +2418,8 @@ function spawnRaid(tx,ty,action){ const arson=(action==='arson');
   for(let t=0;t<16&&roadList.length;t++){ const r=roadList[(Math.random()*roadList.length)|0]; const d=Math.hypot(r[0]-tx,r[1]-ty); if(d>2&&d<bestd){bestd=d;edge=r;} }
   if(!edge){ const a=Math.random()*6.283; edge=[tx+Math.cos(a)*3.5, ty+Math.sin(a)*3.5]; }
   const n=3+((Math.random()*3)|0); const mob=[];               // 3–5 ronin — a warband
-  for(let i=0;i<n;i++) mob.push({ kind:'ronin', x:edge[0]+(Math.random()-0.5)*1.6, y:edge[1]+(Math.random()-0.5)*1.6,
-    ph:Math.random()*6, dir:1, spd:1.8+Math.random()*0.7, torch: arson?true:(Math.random()<0.3),
-    skin:SKIN[(Math.random()*SKIN.length)|0], col:'#2c2a30', obi:'#3a2230' });
+  for(let i=0;i<n;i++) mob.push(roninKit({ x:edge[0]+(Math.random()-0.5)*1.6, y:edge[1]+(Math.random()-0.5)*1.6,
+    ph:Math.random()*6, dir:1, spd:1.8+Math.random()*0.7, torch: arson?true:(Math.random()<0.3) }));
   // raidAction/rtx/rty: the building consequence is DEFERRED until the mob ARRIVES (see applyRaid)
   encounters.push({ state:'approach', t:0, st:0, mob, vic, outcome:'lethal', tx, ty, raid:true, raidAction:action||null, rtx:tx, rty:ty });
   if(typeof scatterWitnesses==='function') scatterWitnesses(tx,ty); }
@@ -2610,7 +2623,9 @@ const CUTS={ chop:{py:-7.4, a0:-2.2,  a1:0.55, len:12,   blurW:1.5},
              sweep:{py:-6.0,a0:0.2,   a1:-3.0, len:13.5, blurW:1.8} };
 
 function drawRonin(g,cx,cy,z,a,dir){ dir=dir||1; const ph=a.ph||0, sw=Math.sin(ph), bob=Math.abs(Math.sin(ph))*0.7*z;
-  const robe=a.col||'#2c2a30', skin=a.skin||'#d8ad82';
+  const robe=a.col||'#2c2a30', skin=a.skin||'#d8ad82', build=a.build||'lean';
+  const bulky=build==='bulky', vet=build==='veteran';
+  const torsoW=bulky?1.16:1, torsoTop=bulky?-7.6:-7;                      // bulky reads wider + slightly taller in the shoulder
   /* ---- weight shift / footwork: the WHOLE body leans back on the windup, then drives forward
      into the cut — real stance mechanics, not just an arm swinging in place. ---- */
   let lunge=0, leanAng=0;
@@ -2620,15 +2635,33 @@ function drawRonin(g,cx,cy,z,a,dir){ dir=dir||1; const ph=a.ph||0, sw=Math.sin(p
     const fp=Math.sin(Math.min(1,p*1.25)*Math.PI); lunge=L*fp*dir; leanAng=0.12*dir*fp; }
   g.save(); g.translate(cx+lunge*z,cy); g.rotate(leanAng); cx=0; cy=0;
   g.fillStyle='#211b17'; g.fillRect(cx+(-1.7+sw*0.8)*z,cy+1.4*z,1.4*z,1.5*z); g.fillRect(cx+(0.3-sw*0.8)*z,cy+1.4*z,1.4*z,1.5*z);     // feet
-  g.fillStyle=shade(robe,-18); g.beginPath(); g.moveTo(cx-2.6*z,cy+1.6*z);g.lineTo(cx+2.6*z,cy+1.6*z);g.lineTo(cx+1.9*z,cy-3*z-bob);g.lineTo(cx-1.9*z,cy-3*z-bob);g.closePath();g.fill();   // tattered hakama
-  g.strokeStyle=shade(robe,10); g.lineWidth=0.4*z; for(let k=-2;k<=2;k++){ g.beginPath();g.moveTo(cx+k*1.0*z,cy+1.6*z);g.lineTo(cx+k*1.0*z+sw*0.4*z,cy+2.4*z);g.stroke(); }   // frayed hem
-  g.fillStyle=a.obi||'#3a2230'; g.fillRect(cx-2*z,cy-3.6*z-bob,4*z,1.3*z);                                                            // sash
-  g.fillStyle=robe; g.beginPath(); g.moveTo(cx-2.2*z,cy-3.6*z-bob);g.lineTo(cx+2.2*z,cy-3.6*z-bob);g.lineTo(cx+2.4*z,cy-7*z-bob);g.lineTo(cx-2.4*z,cy-7*z-bob);g.closePath();g.fill();      // torso
-  g.fillStyle=shade(skin,-6); g.beginPath();g.moveTo(cx,cy-3.8*z-bob);g.lineTo(cx-1.3*z,cy-7*z-bob);g.lineTo(cx+1.3*z,cy-7*z-bob);g.closePath();g.fill();                                   // open chest
+  g.fillStyle=shade(robe,-18); g.beginPath(); g.moveTo(cx-2.6*torsoW*z,cy+1.6*z);g.lineTo(cx+2.6*torsoW*z,cy+1.6*z);g.lineTo(cx+1.9*torsoW*z,cy-3*z-bob);g.lineTo(cx-1.9*torsoW*z,cy-3*z-bob);g.closePath();g.fill();   // tattered hakama
+  g.strokeStyle=shade(robe,10); g.lineWidth=0.4*z; for(let k=-2;k<=2;k++){ g.beginPath();g.moveTo(cx+k*1.0*torsoW*z,cy+1.6*z);g.lineTo(cx+k*1.0*torsoW*z+sw*0.4*z,cy+2.4*z);g.stroke(); }   // frayed hem
+  g.fillStyle=a.obi||'#3a2230'; g.fillRect(cx-2*torsoW*z,cy-3.6*z-bob,4*torsoW*z,1.3*z);                                                            // sash
+  g.fillStyle=robe; g.beginPath(); g.moveTo(cx-2.2*torsoW*z,cy-3.6*z-bob);g.lineTo(cx+2.2*torsoW*z,cy-3.6*z-bob);g.lineTo(cx+2.4*torsoW*z,cy+torsoTop*z-bob);g.lineTo(cx-2.4*torsoW*z,cy+torsoTop*z-bob);g.closePath();g.fill();      // torso
+  g.fillStyle=shade(skin,-6); g.beginPath();g.moveTo(cx,cy-3.8*z-bob);g.lineTo(cx-1.3*z,cy+torsoTop*z-bob);g.lineTo(cx+1.3*z,cy+torsoTop*z-bob);g.closePath();g.fill();                                   // open chest
+  if(bulky){ // cracked breastplate over the open chest, lashed with cord — reads heavier at a glance
+    g.fillStyle=shade('#787068',-2); g.beginPath();g.moveTo(cx-2.0*z,cy-3.7*z-bob);g.lineTo(cx+2.0*z,cy-3.7*z-bob);g.lineTo(cx+1.5*z,cy-7.1*z-bob);g.lineTo(cx-1.5*z,cy-7.1*z-bob);g.closePath();g.fill();
+    g.strokeStyle='#16140f'; g.lineWidth=0.32*z; g.beginPath();g.moveTo(cx-0.2*z,cy-3.9*z-bob);g.lineTo(cx+0.6*z,cy-6.9*z-bob);g.stroke();             // crack
+    g.strokeStyle='#3a3024'; g.lineWidth=0.22*z; g.beginPath();g.moveTo(cx-1.6*z,cy-5.3*z-bob);g.lineTo(cx+1.6*z,cy-5.3*z-bob);g.stroke(); }            // lashing cord across the plate
+  else if(vet){ // tied-back sleeve, ready for the cut — the binding is the silhouette tell
+    g.fillStyle=shade(robe,-26); g.fillRect(cx+(dir>0?1.9:-3.3)*z,cy-6.6*z-bob,1.3*z,2.8*z);
+    g.strokeStyle=a.obi||'#3a2230'; g.lineWidth=0.5*z; g.beginPath();g.moveTo(cx+(dir>0?1.9:-2.1)*z,cy-5.8*z-bob);g.lineTo(cx+(dir>0?3.1:-3.3)*z,cy-5.2*z-bob);g.stroke(); }
   const hcx=cx,hcy=cy-8.5*z-bob; g.fillStyle=skin; g.beginPath();g.arc(hcx,hcy,2.2*z,0,7);g.fill();                                   // head
-  g.fillStyle='#141014'; g.beginPath();g.arc(hcx,hcy-0.3*z,2.5*z,Math.PI*0.85,Math.PI*0.15,false);g.fill();                          // wild hair
-  g.strokeStyle='#141014'; g.lineWidth=0.5*z; for(let k=-3;k<=3;k++){ const hx=hcx+k*0.7*z; g.beginPath();g.moveTo(hx,hcy-1.6*z);g.lineTo(hx+(k*0.5+sw)*0.5*z,hcy-3.3*z);g.stroke(); }
+  if(bulky){ // cracked kabuto-lite helmet replaces wild hair — heaviest silhouette of the three.
+              // widened well past head radius so the SILHOUETTE itself reads at small scale, not just surface texture.
+    g.fillStyle='#34342f'; g.beginPath();g.arc(hcx,hcy-0.6*z,2.85*z,Math.PI,0,false);g.fill();
+    g.fillRect(hcx-3.3*z,hcy-1.7*z,6.6*z,1.7*z);                                                                                                       // wide flared brim — broadest point of the silhouette
+    g.fillStyle=shade('#34342f',-18); g.fillRect(hcx-0.8*z,hcy-4.8*z,1.6*z,2.0*z);                                                                     // tall crest stub breaks the top profile
+    g.strokeStyle='#1c1c1a'; g.lineWidth=0.32*z; g.beginPath();g.moveTo(hcx-0.7*z,hcy-2.8*z);g.lineTo(hcx+0.4*z,hcy-1.4*z);g.stroke(); }                // helmet crack
+  else if(vet){ // hachimaki — bound headband, hair tied back, no loose wildness
+    g.fillStyle='#161210'; g.beginPath();g.arc(hcx,hcy-0.3*z,2.2*z,Math.PI*0.95,Math.PI*0.05,false);g.fill();
+    g.fillStyle='#efe2c4'; g.fillRect(hcx-2.3*z,hcy-1.7*z,4.6*z,0.9*z);
+    g.fillStyle=shade(robe,8); g.beginPath();g.moveTo(hcx-(2.3*dir)*z,hcy-1.3*z);g.lineTo(hcx-(3.6*dir)*z,hcy-0.4*z);g.lineTo(hcx-(3.2*dir)*z,hcy+0.4*z);g.closePath();g.fill(); } // trailing knot tail — opposite the sword side so it stays clear of the blade
+  else { g.fillStyle='#141014'; g.beginPath();g.arc(hcx,hcy-0.3*z,2.5*z,Math.PI*0.85,Math.PI*0.15,false);g.fill();                          // wild hair (lean — default)
+    g.strokeStyle='#141014'; g.lineWidth=0.5*z; for(let k=-3;k<=3;k++){ const hx=hcx+k*0.7*z; g.beginPath();g.moveTo(hx,hcy-1.6*z);g.lineTo(hx+(k*0.5+sw)*0.5*z,hcy-3.3*z);g.stroke(); } }
   g.fillStyle='rgba(20,10,12,0.5)'; g.fillRect(hcx-1.4*z,hcy-0.2*z,2.8*z,0.7*z);                                                      // shadowed eyes
+  if(a.scar){ g.strokeStyle='rgba(150,60,55,0.85)'; g.lineWidth=0.4*z; g.beginPath();g.moveTo(hcx-1.7*z,hcy-1.1*z);g.lineTo(hcx-0.5*z,hcy+0.8*z);g.stroke(); }   // veteran's scar across the face — brighter + thicker so it survives ink/wash on top
   const bx=cx+(2.4*dir)*z, by=cy-5.4*z-bob;                                                                                            // drawn katana
   if(a.wind>0){                                                                          // ready stance — blade cocked for the coming cut
     g.strokeStyle='#2a2622'; g.lineWidth=0.7*z;
