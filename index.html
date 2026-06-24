@@ -73,6 +73,25 @@
   #zoom{position:fixed;right:9px;bottom:96px;display:flex;flex-direction:column;gap:5px;z-index:9}
   .zb{width:36px;height:36px;font:inherit;font-weight:700;font-size:17px;cursor:pointer;color:var(--ink);border-radius:5px;
     background:linear-gradient(#262b31,#171b20);border:1px solid var(--edge);box-shadow:inset 0 1px 0 var(--hi)} .zb:active{transform:translateY(1px)}
+  /* ---- top-right links + options ---- */
+  #topLinks{display:flex;align-items:center;gap:5px;margin-left:8px}
+  .tlBtn{font:inherit;font-weight:700;cursor:pointer;color:var(--ink);font-size:11px;padding:5px 9px;border-radius:4px;text-decoration:none;
+    background:linear-gradient(#262b31,#161a1f);border:1px solid var(--edge);box-shadow:inset 0 1px 0 var(--hi);white-space:nowrap;display:inline-flex;align-items:center;gap:4px}
+  .tlBtn:hover{filter:brightness(1.18)} .tlBtn:active{transform:translateY(1px)}
+  .tlBtn svg{width:13px;height:13px;flex:0 0 auto}
+  #optModal{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
+  #optModal.show{display:flex}
+  #optBox{width:320px;background:linear-gradient(#1b1f24,#0f1216);border:1px solid var(--sol);border-radius:10px;padding:16px;color:var(--ink);box-shadow:0 0 24px rgba(20,241,149,.18),0 10px 40px rgba(0,0,0,.6)}
+  #optBox h3{margin:0 0 12px;color:var(--sol);font-family:"Yu Mincho",serif}
+  .optRow{display:flex;flex-direction:column;gap:5px;margin:12px 0}
+  .optRow .optLbl{display:flex;justify-content:space-between;font-size:12px}
+  .optRow .optLbl b{color:var(--ink);font-weight:700}
+  .optRow .optVal{color:var(--sol);font-weight:700}
+  .optRow input[type="range"]{width:100%;accent-color:var(--sol);cursor:pointer}
+  .optChk{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:14px 0;font-size:12px;cursor:pointer}
+  .optChk input{width:18px;height:18px;accent-color:var(--sol);cursor:pointer}
+  #optClose{font:inherit;font-weight:700;cursor:pointer;padding:7px 10px;border-radius:5px;border:1px solid var(--edge);color:var(--ink);
+    width:100%;margin-top:6px;background:linear-gradient(#262b31,#171b20);box-shadow:inset 0 1px 0 var(--hi)} #optClose:active{transform:translateY(1px)}
   /* ---- toasts ---- */
   #toast{position:fixed;left:50%;top:50px;transform:translateX(-50%);z-index:20;display:flex;flex-direction:column;gap:4px;align-items:center;pointer-events:none}
   .tmsg{background:rgba(8,10,13,.92);color:var(--bright);border:1px solid var(--sol);border-radius:5px;padding:4px 11px;font-size:11px;box-shadow:0 3px 12px rgba(0,0,0,.6);opacity:0;animation:tin .3s forwards}
@@ -96,6 +115,7 @@
     #top{height:38px;gap:3px;padding:0 5px}
     .res{padding:2px 6px 2px 5px;font-size:10px;border-radius:4px} .res .ic{width:12px;height:12px}
     #age{font-size:11px;gap:5px} #age button{font-size:11px;padding:2px 6px}
+    #topLinks{gap:3px;margin-left:4px} .tlBtn{font-size:9px;padding:3px 6px} .tlBtn svg{width:11px;height:11px}
     #panel{padding:5px 6px 6px;gap:6px;max-height:42vh}
     #builds{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;height:60px;max-height:60px;-webkit-overflow-scrolling:touch}
     .bbtn{width:52px;height:54px;flex:0 0 auto} .bbtn .nm{height:12px;line-height:12px;font-size:8px} .bbtn .cost{font-size:7px}
@@ -124,12 +144,17 @@
   <div class="res" id="mysticPill" title="Lunar phase · Chinese zodiac · Tarot — tap to draw a card" style="cursor:pointer;gap:6px">
     <span id="moonGlyph" style="font-size:14px">🌕</span><span id="zodiacGlyph" style="font-size:14px">🐉</span><span id="tarotName" style="font-size:10px;color:#b98cff;font-weight:700">The Star</span></div>
   <div id="age"><span id="ageName">縄文 JŌMON</span><button id="advanceBtn" disabled>◎—</button></div>
+  <div id="topLinks">
+    <a class="tlBtn" id="twitterLink" href="https://twitter.com" target="_blank" rel="noopener" title="Twitter">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M23 4.9c-.85.38-1.76.63-2.7.75a4.6 4.6 0 0 0 2.03-2.55c-.92.55-1.93.94-3 1.16A4.6 4.6 0 0 0 11.1 8.5c0 .35.04.7.1 1.03C7.7 9.36 4.7 7.7 2.6 5.16c-.38.66-.6 1.43-.6 2.25 0 1.55.79 2.92 2 3.73-.74-.02-1.43-.23-2.04-.56v.06c0 2.17 1.54 3.97 3.6 4.4-.38.1-.78.16-1.2.16-.29 0-.57-.03-.85-.08.58 1.8 2.25 3.12 4.24 3.15A9.27 9.27 0 0 1 1 20.6a13.1 13.1 0 0 0 7.07 2.06c8.48 0 13.12-7.02 13.12-13.12 0-.2 0-.4-.01-.6A9.3 9.3 0 0 0 23 4.9Z"/></svg></a>
+    <a class="tlBtn" id="telegramLink" href="https://t.me" target="_blank" rel="noopener" title="Telegram">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.5 3.5 2.9 10.7c-.83.33-.82.99-.15 1.27l4.78 1.5 1.85 5.7c.22.6.5.63.98.16l2.55-2.43 4.7 3.46c.7.46 1.18.22 1.36-.6L23.9 4.7c.25-1.05-.45-1.5-1.4-1.2Z"/></svg></a>
+    <button class="tlBtn" id="optionsBtn" title="Options">⚙ Options</button>
+  </div>
 </div>
 <div id="title"><b>ソルシティ</b> SORU SHITI <span>· beauty &amp; ash</span></div>
 <div id="toast"></div>
-<div id="zoom"><button class="zb" id="zin">+</button><button class="zb" id="zout">−</button><button class="zb" id="zfit">⛶</button>
-  <button class="zb" id="envPill" style="width:auto;height:30px;font-size:12px;padding:0 8px;white-space:nowrap">☀ 07:40</button>
-  <button class="zb" id="musicBtn" title="Music on/off">🔇</button></div>
+<div id="zoom"><button class="zb" id="zin">+</button><button class="zb" id="zout">−</button><button class="zb" id="zfit">⛶</button></div>
 
 <div id="panel">
   <div id="builds"></div>
@@ -170,6 +195,20 @@
   <div class="row" style="margin-top:8px"><input id="dxAmt" type="number" value="1" min="0" step="0.1"><span>
     <button id="dxBuy">SOL→SORU</button> <button id="dxSell">SORU→SOL</button></span></div>
   <div class="row" style="margin-top:8px"><button id="dxClose" style="width:100%">CLOSE</button></div>
+</div></div>
+
+<div id="optModal"><div id="optBox">
+  <h3>⚙ OPTIONS</h3>
+  <div class="optRow">
+    <div class="optLbl"><b>Music Volume</b><span class="optVal" id="optMusicVal">16%</span></div>
+    <input id="optMusicVol" type="range" min="0" max="100" step="1" value="16">
+  </div>
+  <div class="optRow">
+    <div class="optLbl"><b>Sound Effects Volume</b><span class="optVal" id="optSfxVal">90%</span></div>
+    <input id="optSfxVol" type="range" min="0" max="100" step="1" value="90">
+  </div>
+  <label class="optChk"><span>Disable Weather Graphics</span><input id="optNoWeather" type="checkbox"></label>
+  <button id="optClose">CLOSE</button>
 </div></div>
 
 <script>
@@ -319,10 +358,9 @@ function updateEnv(dt){ const pt=ENV.t; if(ENV.auto)ENV.t=(ENV.t+dt/CYCLE)%1; if
   if(ENV.weather==='snow'){ while(ENV.snow.length<heavy)ENV.snow.push({x:Math.random()*VW,y:Math.random()*VH,v:30+Math.random()*40,ph:Math.random()*6,r:1.2+Math.random()*1.8});
     if(ENV.snow.length>heavy)ENV.snow.length=heavy;
     for(const d of ENV.snow){ d.ph+=dt*2; d.y+=d.v*dt; d.x+=Math.sin(d.ph)*14*dt; if(d.y>VH){d.y=-6;d.x=Math.random()*VW;} } } else ENV.snow.length=0;
-  if(ENV.lightning>0)ENV.lightning=Math.max(0,ENV.lightning-dt*3);
-  if(envPill){ const hh=Math.floor(ENV.t*24), mm=Math.floor((ENV.t*24-hh)*60); const ic=ENV.weather==='rain'?'🌧':ENV.weather==='snow'?'❄':ENV.weather==='fog'?'🌫':ENV.night>0.5?'🌙':'☀';
-    envPill.textContent=ic+' '+String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0'); } }
-function drawWeatherFX(){ const z=cam.zoom;
+  if(ENV.lightning>0)ENV.lightning=Math.max(0,ENV.lightning-dt*3); }
+function weatherGfxDisabled(){ return optGet('opt_noWeather',false); }
+function drawWeatherFX(){ if(weatherGfxDisabled())return; const z=cam.zoom;
   // night tint
   if(ENV.night>0.04){ ctx.fillStyle='rgba(18,26,54,'+(ENV.night*0.42)+')'; ctx.fillRect(0,0,VW,VH); }
   // fog
@@ -3802,13 +3840,19 @@ function forestTick(){ /* no-op: random regrowth removed */ }
 /* ---- fire ---- */
 /* ===== fire-watch bell (hanshō 半鐘) — synthesized Web Audio alert ===== */
 let _actx=null, _fireBellAt=0;
-function sfxCtx(){ try{ if(!_actx)_actx=new (window.AudioContext||window.webkitAudioContext)(); if(_actx.state==='suspended')_actx.resume(); }catch(e){} return _actx; }
+let _sfxGain=null;
+function optGet(k,d){ try{ var v=localStorage.getItem(k); return v==null?d:JSON.parse(v); }catch(e){ return d; } }
+function optSet(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
+function sfxCtx(){ try{ if(!_actx)_actx=new (window.AudioContext||window.webkitAudioContext)(); if(_actx.state==='suspended')_actx.resume();
+  if(_actx&&!_sfxGain){ _sfxGain=_actx.createGain(); _sfxGain.gain.value=optGet('opt_sfxVol',0.9); _sfxGain.connect(_actx.destination); } }catch(e){} return _actx; }
+function sfxDest(ctx){ return (_sfxGain&&_sfxGain.context===ctx)?_sfxGain:ctx.destination; }
 function bellStrike(ctx,t0,freq,gain){ const parts=[1,2.01,2.69,3.76,5.42];   // inharmonic metal partials
+  const dest=sfxDest(ctx);
   parts.forEach((p,i)=>{ const o=ctx.createOscillator(),g=ctx.createGain();
     o.type='triangle'; o.frequency.value=freq*p*(1+(Math.random()-0.5)*0.012);
     const a=gain/(i*1.4+1), dur=1.15/(1+i*0.7);
     g.gain.setValueAtTime(0.0001,t0); g.gain.exponentialRampToValueAtTime(a,t0+0.005); g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
-    o.connect(g).connect(ctx.destination); o.start(t0); o.stop(t0+dur+0.05); }); }
+    o.connect(g).connect(dest); o.start(t0); o.stop(t0+dur+0.05); }); }
 function playFireBell(urgent){ const ctx=sfxCtx(); if(!ctx)return; const t=ctx.currentTime;
   const n=urgent?3:1; for(let k=0;k<n;k++) bellStrike(ctx,t+k*0.2,548,0.17);   // rapid clanging = fire nearby
   _fireBellAt=(typeof performance!=='undefined')?performance.now():0; }
@@ -3855,7 +3899,7 @@ function refreshHUD(){
 }
 let advTimer=0;
 function advise(s){document.getElementById('advisor').innerHTML='<b>DR. SOL</b> — '+s;advTimer=9;}
-function toast(t,s){if(window.playNotification)playNotification();const d=document.createElement('div');d.className='tmsg';d.innerHTML='<b>'+t+'</b>'+(s?' · '+s:'');document.getElementById('toast').appendChild(d);setTimeout(()=>d.remove(),2200);}
+function toast(t,s){const d=document.createElement('div');d.className='tmsg';d.innerHTML='<b>'+t+'</b>'+(s?' · '+s:'');document.getElementById('toast').appendChild(d);setTimeout(()=>d.remove(),2200);}
 function worstDistrict(){ if(!healthGrid)return null; const GS=10,cols=Math.ceil(W/GS),bk={};
   for(let y=0;y<H;y++)for(let x=0;x<W;x++){const c=grid[y][x];if(!c.zone||c.dev<1)continue;const noH=!healthGrid[y][x],noE=!eduGrid[y][x];if(!noH&&!noE)continue;
     const k=((y/GS)|0)*cols+((x/GS)|0);const b=bk[k]||(bk[k]={n:0,nH:0,nE:0,sx:0,sy:0});b.n++;if(noH)b.nH++;if(noE)b.nE++;b.sx+=x;b.sy+=y;}
@@ -3897,15 +3941,14 @@ function markSel(){ document.querySelectorAll('.bbtn').forEach(d=>d.classList.to
 /* ============================ INPUT / ACTIONS ============================ */
 let lastPoorMsg=0;
 function spend(g){ if(S.wallet.soru<g){ if(performance.now()-lastPoorMsg>1200){ lastPoorMsg=performance.now();
-    if(window.playError)playError(); toast('Need $'+g+' SORU','have $'+fmt(Math.round(S.wallet.soru))); advise('Out of $SORU — it is burned on every act. Earn SOL from the buildings you keep standing, then swap SOL→$SORU at the DEX.'); } return false; }
+    toast('Need $'+g+' SORU','have $'+fmt(Math.round(S.wallet.soru))); advise('Out of $SORU — it is burned on every act. Earn SOL from the buildings you keep standing, then swap SOL→$SORU at the DEX.'); } return false; }
   S.wallet.soru-=g; S.burned+=g; S.recentBurn+=g; S.kami+=g; return true; }   // 100% burned → Kami (1:1, exactly $SORU spent)
 function place(tx,ty){ if(!inB(tx,ty))return; const c=grid[ty][tx]; gridVersion++;
   if(S.demo){ if(c.civ===TOWN)return;                          // RAZE: tear down your OWN works only — rivals must be PILLAGED
-    if(c.own&&c.own!==CLIENT){ if(window.playError)playError(); toast('Not yours','use PILLAGE on rivals'); return; }
+    if(c.own&&c.own!==CLIENT){ toast('Not yours','use PILLAGE on rivals'); return; }
     if(!(c.zone||c.civ||c.dev||c.road||c.wire||c.ruin)){ return; } // nothing to raze here
     if(!spend(500))return;                                       // 500 $SORU burned — cleanup tool
     c.zone=0;c.civ=0;c.dev=0;c.own=0;c.wire=0;c.blight=0;c.ruin=0;c.burn=0;c.guard=0; if(c.road)c.road=0;
-    if(window.playRaze)playRaze();
     syncTraffic(); rebuildCoverage(); refreshHUD(); return; }
   if(S.douse){ if(c.burn){c.burn=0; for(const[dx,dy]of NEIGH){const n=grid[ty+dy]&&grid[ty+dy][tx+dx];if(n&&n.burn)n.burn=Math.max(0,n.burn-2);} toast('💧 Doused');} return; }
   if(S.guard){ const mine=(c.dev>0&&c.own===CLIENT)||(c.civ&&c.civ!==TOWN);
@@ -3928,13 +3971,13 @@ function place(tx,ty){ if(!inB(tx,ty))return; const c=grid[ty][tx]; gridVersion+
     else toast('🛡 Pillage repelled','the watch held the line');
     refreshHUD(); return; }
   const it=S.tool; if(!it)return;
-  if(it.road){ if(!isLand(tx,ty)||mountain(c)||c.civ||c.zone)return; if(c.road)return; if(!spend(it.cost))return; c.road=1; c.br=(c.ter===WATER)?1:0; if(c.ter<GRASS&&c.ter!==WATER)c.ter=BARE; if(window.playBuild)playBuild(); syncTraffic(); refreshHUD(); return; }
-  if(it.wire){ if(mountain(c)||c.civ||c.zone)return; if(!isLand(tx,ty)&&!c.road)return; if(c.wire)return; if(!spend(it.cost))return; c.wire=1; if(window.playBuild)playBuild(); refreshHUD(); return; }
+  if(it.road){ if(!isLand(tx,ty)||mountain(c)||c.civ||c.zone)return; if(c.road)return; if(!spend(it.cost))return; c.road=1; c.br=(c.ter===WATER)?1:0; if(c.ter<GRASS&&c.ter!==WATER)c.ter=BARE; syncTraffic(); refreshHUD(); return; }
+  if(it.wire){ if(mountain(c)||c.civ||c.zone)return; if(!isLand(tx,ty)&&!c.road)return; if(c.wire)return; if(!spend(it.cost))return; c.wire=1; refreshHUD(); return; }
   if(it.zone!=null){ if(!isLand(tx,ty)||mountain(c)||occupied(c)||c.civ||c.ruin)return; if(!spend(it.cost))return; c.zone=it.zone; if(c.ter<GRASS||c.ter===FOREST){c.ter=GRASS;}
-    c.dev= nearRoad(tx,ty,3)?1:0; if(c.dev>0)c.own=CLIENT; if(window.playBuild)playBuild(); render(); refreshHUD(); return; }
+    c.dev= nearRoad(tx,ty,3)?1:0; if(c.dev>0)c.own=CLIENT; render(); refreshHUD(); return; }
   if(it.civ!=null){ if(!isLand(tx,ty)||mountain(c)||occupied(c)||c.civ||c.ruin)return; if(it.civ===VALID&&S.era<8){advise('Validators need the Quantum Edo age.');return;}
     if(!spend(it.cost))return; c.civ=it.civ; c.zone=0;c.dev=0; if(it.civ===VALID)c.own=CLIENT; if(c.ter===FOREST||c.ter<GRASS)c.ter=BARE; if(it.civ===FARM)c.ter=BARE;
-    if(window.playBuild)playBuild(); rebuildCoverage(); syncTraffic(); refreshHUD(); return; }
+    rebuildCoverage(); syncTraffic(); refreshHUD(); return; }
 }
 let dragging=false,dragPan=false,last=null,downPt=null,moved=false,pinched=false; const ptrs=new Map(); let pinch=null;
 function evp(e){const r=cv.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top];}
@@ -3965,7 +4008,7 @@ function fit(){cam.zoom=clamp(0.62*60/W,ZMIN,ZMAX);cam.x=VW/2-(W/2-H/2)*(TW/2)*c
 document.getElementById('zin').onclick=()=>setZoom(cam.zoom*1.2,VW/2,VH/2);
 document.getElementById('zout').onclick=()=>setZoom(cam.zoom*0.83,VW/2,VH/2);
 document.getElementById('zfit').onclick=fit;
-document.getElementById('envPill').onclick=()=>{ const seq=['clear','rain','snow','fog']; ENV.target=seq[(seq.indexOf(ENV.target)+1)%seq.length]; if(ENV.target!=='clear')ENV.weather=ENV.target; ENV.wTimer=40; toast('Weather',ENV.target); };
+
 function toolBtn(id,prop){ const PROPS=['hand','douse','demo','pillage','arson','guard'], BTNS=['handBtn','douseBtn','demoBtn','pillageBtn','arsonBtn','guardBtn'];
   document.getElementById(id).onclick=function(){ S[prop]=!S[prop]; if(S[prop]){S.tool=null; PROPS.forEach(p=>{if(p!==prop)S[p]=false;});}
   BTNS.forEach(b=>document.getElementById(b).classList.toggle('on',document.getElementById(b)===this&&S[prop]));
@@ -3989,6 +4032,23 @@ document.getElementById('dxBuy').onclick=()=>{const amt=Math.max(0,+dxAmt.value|
 document.getElementById('dxSell').onclick=()=>{const amt=Math.max(0,+dxAmt.value||0);if(amt<=0||amt>S.wallet.soru)return;
   const k=S.dex.sol*S.dex.soru,newSoru=S.dex.soru+amt,out=S.dex.sol-k/newSoru; S.wallet.soru-=amt;S.wallet.sol+=out*0.99;S.dex.soru=newSoru;S.dex.sol-=out; refreshDex();refreshHUD();toast('Swapped','+'+(out*0.99).toFixed(3)+' SOL');};
 
+// OPTIONS
+function openOptions(){
+  const mv=Math.round(optGet('opt_musicVol',0.16)*100), sv=Math.round(optGet('opt_sfxVol',0.9)*100);
+  optMusicVol.value=mv; optMusicVal.textContent=mv+'%';
+  optSfxVol.value=sv; optSfxVal.textContent=sv+'%';
+  optNoWeather.checked=!!optGet('opt_noWeather',false);
+  document.getElementById('optModal').classList.add('show');
+}
+document.getElementById('optionsBtn').onclick=openOptions;
+document.getElementById('optClose').onclick=()=>document.getElementById('optModal').classList.remove('show');
+document.getElementById('optModal').addEventListener('mousedown',(e)=>{ if(e.target.id==='optModal')document.getElementById('optModal').classList.remove('show'); });
+optMusicVol.oninput=function(){ const v=(+this.value||0)/100; optMusicVal.textContent=this.value+'%'; optSet('opt_musicVol',v); BGM_TARGET_VOL=v;
+  if(bgmOn){ bgmFadeTo(v,0.15); } if(v<=0)bgmOn=false; };
+optSfxVol.oninput=function(){ const v=(+this.value||0)/100; optSfxVal.textContent=this.value+'%'; optSet('opt_sfxVol',v);
+  sfxCtx(); if(_sfxGain)_sfxGain.gain.value=v; };
+optNoWeather.onchange=function(){ optSet('opt_noWeather',!!this.checked); if(this.checked){ENV.rain.length=0;ENV.snow.length=0;ENV.lightning=0;} };
+
 /* ============================ LOOP / BOOT ============================ */
 let lastT=0, tickAcc=0, fireAcc=0, bootFitT=0, lastVPH=-1;
 function loop(t){ const dt=lastT?Math.min(0.05,(t-lastT)/1000):0; lastT=t; fx=t;
@@ -4008,11 +4068,10 @@ try{
   document.getElementById('mysticPill').onclick=drawTarotCard; updateMystic();
 }catch(err){ if(window.__err)window.__err('boot: '+(err.message||err)); }
 const BGM_FILE="ost.opus"; // loaded by filename from the same folder as index.html
-/* ===== ambient background music — Web Audio API, gapless loop, static low volume =====
+/* ===== ambient background music — Web Audio API, gapless loop =====
    Decoupled from sim/raid/combat state by design: never read, never modified by any
-   gameplay system. Volume is fixed; the only transition ever applied is the one-time
-   boot fade-in. */
-const BGM_TARGET_VOL=0.16;
+   gameplay system. Volume is user-controlled via the Options menu (real-time) and persisted. */
+let BGM_TARGET_VOL=optGet('opt_musicVol',0.16);
 let bgmGain=null,bgmSrc=null,bgmBuf=null,bgmOn=false,bgmLoading=false,bgmReady=false;
 function bgmEnsureGraph(){ const ctx=sfxCtx(); if(!ctx||bgmGain)return ctx; bgmGain=ctx.createGain(); bgmGain.gain.value=0; bgmGain.connect(ctx.destination); return ctx; }
 async function bgmLoadBuffer(){ if(bgmBuf||bgmLoading)return; bgmLoading=true; const ctx=bgmEnsureGraph(); if(!ctx){bgmLoading=false;return;}
@@ -4034,12 +4093,11 @@ function bgmFadeTo(vol,secs){ const ctx=bgmEnsureGraph(); if(!ctx)return; const 
 async function setMusic(on){ const ctx=bgmEnsureGraph(); if(!ctx)return;
   if(on){ if(ctx.state==='suspended')await ctx.resume();
     if(!bgmReady)await bgmLoadBuffer();
-    if(!bgmReady){ bgmOn=false; musicBtn.textContent='🔇'; return; }
+    if(!bgmReady){ bgmOn=false; return; }
     if(!bgmSrc)bgmStartSource();
-    bgmFadeTo(BGM_TARGET_VOL,1.4); bgmOn=true; musicBtn.textContent='🔊'; }
-  else { bgmFadeTo(0,0.6); bgmOn=false; musicBtn.textContent='🔇'; } }
-musicBtn.onclick=()=>setMusic(!bgmOn);
-function firstGesture(){ if(!bgmOn)setMusic(true); sfxCtx(); window.removeEventListener('pointerdown',firstGesture); }
+    bgmFadeTo(BGM_TARGET_VOL,1.4); bgmOn=true; }
+  else { bgmFadeTo(0,0.6); bgmOn=false; } }
+function firstGesture(){ if(!bgmOn&&BGM_TARGET_VOL>0)setMusic(true); sfxCtx(); window.removeEventListener('pointerdown',firstGesture); }
 window.addEventListener('pointerdown',firstGesture,{once:true});
 advise('Build something beautiful. Every act costs <b>$SORU</b> (top-left) and <b>100% is burned</b> into <b>Kami</b> (⛩) that ages the whole island through 9 Ages. Buildings you keep standing pay you <b>SOL</b> — swap it for more $SORU at the DEX. Guard your wards with FIRE & POLICE; raid rivals (🔶) with ARSON / PILLAGE.');
 requestAnimationFrame(loop);
@@ -4511,94 +4569,6 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
 
 </script>
 
-<script id="ykUiSfx">
-/* ============================================================
-   SORU SHITI — UI Sound Effects
-   Web Audio API, sample-based. click/build/raze/error/notification.
-   Files expected beside index.html. Reuses sfxCtx() graph.
-   ============================================================ */
-(function(){
-  "use strict";
-  if (window.__uiSfx) return; window.__uiSfx = true;
-
-  var FILES = { click:'click.wav', build:'build.wav', raze:'raze.wav', error:'error.wav', notification:'notification.wav' };
-
-  var ctx = null, bus = null;
-  function ensureCtx(){
-    if (ctx) { if (ctx.state==='suspended') ctx.resume(); return ctx; }
-    try { ctx = (typeof sfxCtx === 'function') ? sfxCtx() : new (window.AudioContext||window.webkitAudioContext)(); }
-    catch(e){ ctx = null; }
-    if (!ctx) return null;
-    bus = ctx.createGain(); bus.gain.value = 0.7;
-    bus.connect(ctx.destination);
-    return ctx;
-  }
-
-  var bufferCache = {}, loadFailed = {}, loadingNow = {};
-  function loadSample(filename){
-    if (bufferCache[filename] || loadFailed[filename] || loadingNow[filename]) return;
-    var c = ensureCtx();
-    if (!c) return;
-    loadingNow[filename] = true;
-    var resolvedURL = new URL(filename, document.baseURI).href;
-    fetch(filename).then(function(res){
-      if (!res.ok) throw new Error('HTTP '+res.status+' at '+resolvedURL);
-      return res.arrayBuffer();
-    }).then(function(ab){ return c.decodeAudioData(ab); })
-    .then(function(buf){ bufferCache[filename]=buf; loadingNow[filename]=false; })
-    .catch(function(e){
-      loadFailed[filename]=true; loadingNow[filename]=false;
-      var msg='uiSfx sample missing/unreadable: '+filename+' — looked for it at '+resolvedURL+' ('+(e.message||e)+')';
-      if (window.__err) window.__err(msg); else console.warn(msg);
-    });
-  }
-  for (var k in FILES) loadSample(FILES[k]);
-
-  var lastPlay = {}; // filename -> last performance.now(), throttles spam to ~30ms
-  function play(filename, opts){
-    var c = ensureCtx();
-    if (!c) return;
-    var now = performance.now();
-    if (lastPlay[filename] && now-lastPlay[filename] < 30) return;
-    lastPlay[filename] = now;
-    if (!bufferCache[filename]) { loadSample(filename); return; } // not ready yet — drop silently
-    opts = opts || {};
-    var src = c.createBufferSource();
-    src.buffer = bufferCache[filename];
-    var rateJitter = (opts.pitchJitter==null?0.06:opts.pitchJitter);
-    src.playbackRate.value = 1 + (Math.random()*2-1)*rateJitter;
-    var g = c.createGain();
-    var baseVol = (opts.volume==null?1:opts.volume);
-    var volJitter = (opts.volJitter==null?0.12:opts.volJitter);
-    g.gain.value = Math.max(0, baseVol * (1 + (Math.random()*2-1)*volJitter));
-    src.connect(g); g.connect(bus||c.destination);
-    src.start(0);
-  }
-
-  function playClick(opts){ play(FILES.click, opts); }
-  function playBuild(opts){ play(FILES.build, opts); }
-  function playRaze(opts){ play(FILES.raze, opts); }
-  function playError(opts){ play(FILES.error, Object.assign({pitchJitter:0.03,volJitter:0.08}, opts||{})); }
-  function playNotification(opts){ play(FILES.notification, opts); }
-
-  window.playClick = playClick;
-  window.playBuild = playBuild;
-  window.playRaze = playRaze;
-  window.playError = playError;
-  window.playNotification = playNotification;
-
-  /* Delegated click sfx for buttons / tool tiles / toggles. Capture phase so it
-     fires even when a handler later calls stopPropagation(). Canvas placement
-     (#cv) is excluded — build/raze/error sfx for that path are fired explicitly
-     from place()/spend() so it doesn't also get a generic click sound. */
-  document.addEventListener('click', function(e){
-    var t = e.target.closest('button, .bbtn, .pbtn, .zb, #ykGear, #ykMin, .ykCard .pick');
-    if (!t || t.closest('#cv')) return;
-    playClick();
-  }, true);
-})();
-</script>
-
 <script id="ykGibberish">
 /* ============================================================
    SORU SHITI — Townsperson Gibberish Voice Layer (Simlish-style)
@@ -4677,7 +4647,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     } catch(e){}
     voicesBus.connect(comp || master);
     if (comp) comp.connect(master);
-    master.connect(ctx.destination);
+    master.connect((typeof sfxDest==='function')?sfxDest(ctx):ctx.destination);
     return ctx;
   }
 
