@@ -129,8 +129,7 @@
 <div id="toast"></div>
 <div id="zoom"><button class="zb" id="zin">+</button><button class="zb" id="zout">−</button><button class="zb" id="zfit">⛶</button>
   <button class="zb" id="envPill" style="width:auto;height:30px;font-size:12px;padding:0 8px;white-space:nowrap">☀ 07:40</button>
-  <button class="zb" id="musicBtn" title="Music on/off">🔇</button>
-  <input type="range" id="musicVol" min="0" max="100" value="40" title="Music volume" style="width:64px;accent-color:#b98cff;vertical-align:middle;margin-left:4px"></div>
+  <button class="zb" id="musicBtn" title="Music on/off">🔇</button></div>
 
 <div id="panel">
   <div id="builds"></div>
@@ -3349,7 +3348,8 @@ function spawnRaid(tx,ty,action){ const arson=(action==='arson');
   const approachBudget=Math.max(14, bestd/1.6+6);
   // raidAction/rtx/rty: the building consequence is DEFERRED until the mob ARRIVES (see applyRaid)
   encounters.push({ state:'approach', t:0, st:0, mob, vic, outcome:'lethal', tx, ty, raid:true, raidAction:action||null, rtx:tx, rty:ty, approachBudget });
-  if(typeof scatterWitnesses==='function') scatterWitnesses(tx,ty); }
+  if(typeof scatterWitnesses==='function') scatterWitnesses(tx,ty);
+  if(window.SoruGibberish) window.SoruGibberish.onRaidEvent(tx,ty); }
 
 /* DEFERRED to the 'collapse' phase — the household is already cut down; now the structure falls,
    crushing a couple more under the wreckage, blood pooling in the rubble. */
@@ -3995,6 +3995,7 @@ function loop(t){ const dt=lastT?Math.min(0.05,(t-lastT)/1000):0; lastT=t; fx=t;
     // During the first ~2s, re-fit whenever the viewport height changes (mobile URL-bar collapse, late layout)
     if(bootFitT<2.2){ bootFitT+=dt; const h=Math.round(cv.getBoundingClientRect().height)||0; if(h>0&&h!==lastVPH){ lastVPH=h; resize(); fit(); } }
     updateEnv(dt); updateTraffic(dt); updateResidents(dt); updateApparitions(dt); updateEncounters(dt); updateCorpses(dt); updateGore(dt); updateDecay(dt);
+    if(window.SoruGibberish) window.SoruGibberish.update(dt);
     tickAcc+=dt; if(tickAcc>=1.5){tickAcc=0;tick();}
     fireAcc+=dt; if(fireAcc>=40){fireAcc=0; if(S.pop>90&&Math.random()<0.18)igniteRandom();}
     render();
@@ -4005,26 +4006,21 @@ try{
   S.tool=CATALOG[0]; markSel();
   document.getElementById('mysticPill').onclick=drawTarotCard; updateMystic();
 }catch(err){ if(window.__err)window.__err('boot: '+(err.message||err)); }
-/* ===== ambient background music — Web Audio API, gapless loop, user-set static volume =====
-   Loads ost.opus by filename from the same folder as index.html (no upload needed).
+const BGM_FILE="ost.opus"; // loaded by filename from the same folder as index.html
+/* ===== ambient background music — Web Audio API, gapless loop, static low volume =====
    Decoupled from sim/raid/combat state by design: never read, never modified by any
-   gameplay system, and never auto-intensifies for raids/disasters. The only volume
-   changes are the explicit ones below: boot fade-in, mute/unmute fade, and the
-   user dragging the slider — nothing else ever calls bgmFadeTo.
-   Falls back to the legacy embedded data-URI (BGM_DATA_URI) only if present, for
-   older saved copies of this file that still carry the inline payload. */
-const BGM_FILE="ost.opus";
-const BGM_DEFAULT_VOL=0.40;                                  // slider default (0-1), independent of the old fixed 0.16
+   gameplay system. Volume is fixed; the only transition ever applied is the one-time
+   boot fade-in. */
+const BGM_TARGET_VOL=0.16;
 let bgmGain=null,bgmSrc=null,bgmBuf=null,bgmOn=false,bgmLoading=false,bgmReady=false;
-let bgmVolLevel=(typeof lget==='function'?lget('bgmVol',BGM_DEFAULT_VOL):BGM_DEFAULT_VOL);
 function bgmEnsureGraph(){ const ctx=sfxCtx(); if(!ctx||bgmGain)return ctx; bgmGain=ctx.createGain(); bgmGain.gain.value=0; bgmGain.connect(ctx.destination); return ctx; }
 async function bgmLoadBuffer(){ if(bgmBuf||bgmLoading)return; bgmLoading=true; const ctx=bgmEnsureGraph(); if(!ctx){bgmLoading=false;return;}
-  try{ const res=await fetch(BGM_FILE); const ab=await res.arrayBuffer(); bgmBuf=await ctx.decodeAudioData(ab); bgmReady=true; }
+  try{ const res=await fetch(BGM_FILE); if(!res.ok)throw new Error('fetch '+res.status); const ab=await res.arrayBuffer(); bgmBuf=await ctx.decodeAudioData(ab); bgmReady=true; }
   catch(e){
-    if(typeof BGM_DATA_URI==='string'){                       // legacy fallback path only
+    if(typeof BGM_DATA_URI==='string'){                       // legacy fallback for older saved copies carrying the inline payload
       try{ const res2=await fetch(BGM_DATA_URI); const ab2=await res2.arrayBuffer(); bgmBuf=await ctx.decodeAudioData(ab2); bgmReady=true; }
-      catch(e2){ bgmReady=false; }
-    } else bgmReady=false;
+      catch(e2){ bgmReady=false; if(window.__err)window.__err('bgm load failed: '+(e2.message||e2)); }
+    } else { bgmReady=false; if(window.__err)window.__err('bgm load failed: '+(e.message||e)); }
   }
   bgmLoading=false; }
 function bgmStartSource(){ const ctx=bgmEnsureGraph(); if(!ctx||!bgmBuf)return;
@@ -4038,15 +4034,9 @@ async function setMusic(on){ const ctx=bgmEnsureGraph(); if(!ctx)return;
     if(!bgmReady)await bgmLoadBuffer();
     if(!bgmReady){ bgmOn=false; musicBtn.textContent='🔇'; return; }
     if(!bgmSrc)bgmStartSource();
-    bgmFadeTo(bgmVolLevel,1.4); bgmOn=true; musicBtn.textContent='🔊'; }
+    bgmFadeTo(BGM_TARGET_VOL,1.4); bgmOn=true; musicBtn.textContent='🔊'; }
   else { bgmFadeTo(0,0.6); bgmOn=false; musicBtn.textContent='🔇'; } }
-function bgmSetVolume(v){ bgmVolLevel=Math.max(0,Math.min(1,v)); if(typeof lset==='function')lset('bgmVol',bgmVolLevel);
-  if(bgmOn&&bgmGain){ const ctx=bgmEnsureGraph(); if(ctx){ bgmGain.gain.cancelScheduledValues(ctx.currentTime); bgmGain.gain.setValueAtTime(bgmVolLevel,ctx.currentTime); } } }
 musicBtn.onclick=()=>setMusic(!bgmOn);
-if(typeof musicVol!=='undefined'&&musicVol){
-  musicVol.value=Math.round(bgmVolLevel*100);
-  musicVol.oninput=()=>bgmSetVolume(musicVol.value/100);
-}
 function firstGesture(){ if(!bgmOn)setMusic(true); sfxCtx(); window.removeEventListener('pointerdown',firstGesture); }
 window.addEventListener('pointerdown',firstGesture,{once:true});
 advise('Build something beautiful. Every act costs <b>$SORU</b> (top-left) and <b>100% is burned</b> into <b>Kami</b> (⛩) that ages the whole island through 9 Ages. Buildings you keep standing pay you <b>SOL</b> — swap it for more $SORU at the DEX. Guard your wards with FIRE & POLICE; raid rivals (🔶) with ARSON / PILLAGE.');
@@ -4518,5 +4508,424 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
 })();
 
 </script>
+
+<script id="ykGibberish">
+/* ============================================================
+   SORU SHITI — Townsperson Gibberish Voice Layer
+   Web Audio API, zoom-gated, procedural, emotion-driven.
+   Reads cam.zoom / S.era / residents / traffic / encounters.
+   Writes nothing back to sim state — pure presentation layer.
+   ============================================================ */
+(function(){
+  "use strict";
+  if (window.__gib) return; window.__gib = true;
+
+  /* ---------------- zoom gate ---------------- */
+  // ZMIN/ZMAX exist on the camera already; we read cam.zoom each frame and
+  // derive a 0..1 audibility curve. Below GIB_Z_LOW: silent. Above GIB_Z_HIGH: full volume.
+  var GIB_Z_LOW  = 0.45;
+  var GIB_Z_HIGH = 1.6;
+  function zoomAudibility(){
+    var z = (typeof cam !== 'undefined' && cam.zoom) ? cam.zoom : 0;
+    if (z <= GIB_Z_LOW) return 0;
+    if (z >= GIB_Z_HIGH) return 1;
+    var t = (z - GIB_Z_LOW) / (GIB_Z_HIGH - GIB_Z_LOW);
+    return t*t*(3-2*t); // smoothstep
+  }
+
+  /* ---------------- audio graph ---------------- */
+  var ctx = null, master = null, voicesBus = null;
+  function ensureCtx(){
+    if (ctx) { if (ctx.state==='suspended') ctx.resume(); return ctx; }
+    try {
+      ctx = (typeof sfxCtx === 'function') ? sfxCtx() : new (window.AudioContext||window.webkitAudioContext)();
+    } catch(e){ ctx = null; }
+    if (!ctx) return null;
+    master = ctx.createGain(); master.gain.value = 0;
+    voicesBus = ctx.createGain(); voicesBus.gain.value = 0.85;
+    var comp = null;
+    try {
+      comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -28; comp.knee.value = 18; comp.ratio.value = 3.2;
+      comp.attack.value = 0.006; comp.release.value = 0.18;
+    } catch(e){}
+    voicesBus.connect(comp || master);
+    if (comp) comp.connect(master);
+    master.connect(ctx.destination);
+    return ctx;
+  }
+
+  /* ---------------- phoneme bank ----------------
+     Japanese-flavored CV (consonant-vowel) mora set, loosely grouped by
+     character so formant shaping stays plausible per emotion. */
+  var VOWELS = ['a','i','u','e','o'];
+  var VFORM = { // approx formant centers [F1,F2] in Hz, used to drive filter sweeps
+    a:[730,1090], i:[270,2290], u:[300,870], e:[530,1840], o:[570,840]
+  };
+  var CONS_SOFT = ['','m','n','y','w','h'];
+  var CONS_HARD = ['k','t','s','d','g','z','b','p'];
+
+  function pick(arr){ return arr[(Math.random()*arr.length)|0]; }
+  function jrand(spread){ return (Math.random()*2-1)*spread; }
+
+  /* ---------------- emotion presets ----------------
+     Each preset shapes pitch, mora rate/length, formant brightness,
+     vibrato, breathiness and burst behavior (laugh/stutter). */
+  var EMO = {
+    idle:      { pitch:1.00, jit:0.05, rate:3.6, dur:0.16, gap:0.10, bright:0.35, vibrato:0.015, breath:0.22, burst:0 },
+    social:    { pitch:1.05, jit:0.07, rate:4.4, dur:0.14, gap:0.07, bright:0.45, vibrato:0.02,  breath:0.18, burst:0.05 },
+    happy:     { pitch:1.18, jit:0.06, rate:4.8, dur:0.13, gap:0.06, bright:0.6,  vibrato:0.03,  breath:0.12, burst:0.10 },
+    laugh:     { pitch:1.22, jit:0.04, rate:6.5, dur:0.085,gap:0.03, bright:0.55, vibrato:0.06,  breath:0.05, burst:0.85 },
+    worried:   { pitch:1.12, jit:0.14, rate:5.0, dur:0.10, gap:0.05, bright:0.4,  vibrato:0.08,  breath:0.3,  burst:0.05 },
+    aggressive:{ pitch:0.82, jit:0.10, rate:4.2, dur:0.13, gap:0.04, bright:0.25, vibrato:0.02,  breath:0.08, burst:0.12 },
+    scared:    { pitch:1.35, jit:0.20, rate:7.2, dur:0.07, gap:0.02, bright:0.5,  vibrato:0.12,  breath:0.4,  burst:0.15 },
+    curious:   { pitch:1.02, jit:0.06, rate:3.2, dur:0.18, gap:0.12, bright:0.4,  vibrato:0.02,  breath:0.2,  burst:0.02 }
+  };
+
+  /* ---------------- one synthesized mora burst ----------------
+     Two-formant resonant model: a buzzy glottal source (sawtooth/triangle)
+     shaped by two bandpass peaks approximating vowel formants, plus a
+     short noise burst at onset for consonant attack. */
+  function synthMora(t0, basePitch, emo, vowel, cons, gainScale){
+    if (!ctx) return 0;
+    var fm = VFORM[vowel];
+    var dur = Math.max(0.035, emo.dur * (0.85 + Math.random()*0.3));
+    var src = ctx.createOscillator();
+    src.type = (Math.random()<0.5) ? 'sawtooth' : 'triangle';
+    var f0 = basePitch * (1 + jrand(emo.jit));
+    src.frequency.setValueAtTime(f0, t0);
+
+    // gentle vibrato + pitch wobble per mora for organic imperfection
+    if (emo.vibrato > 0) {
+      var lfo = ctx.createOscillator(); lfo.type='sine'; lfo.frequency.value = 5 + Math.random()*3;
+      var lfoGain = ctx.createGain(); lfoGain.gain.value = f0 * emo.vibrato;
+      lfo.connect(lfoGain); lfoGain.connect(src.frequency);
+      lfo.start(t0); lfo.stop(t0+dur+0.02);
+    }
+    // slight pitch drop across the mora (natural mora decay)
+    src.frequency.exponentialRampToValueAtTime(Math.max(60, f0*0.92), t0+dur);
+
+    var f1 = ctx.createBiquadFilter(); f1.type='bandpass'; f1.frequency.value = fm[0]; f1.Q.value = 6;
+    var f2 = ctx.createBiquadFilter(); f2.type='bandpass'; f2.frequency.value = fm[1]; f2.Q.value = 5 + emo.bright*6;
+    var f2gain = ctx.createGain(); f2gain.gain.value = 0.35 + emo.bright*0.5;
+
+    var amp = ctx.createGain(); amp.gain.value = 0.0001;
+    var attack = Math.min(0.02, dur*0.18), release = dur*0.45;
+    var peak = 0.5*gainScale;
+    amp.gain.setValueAtTime(0.0001, t0);
+    amp.gain.exponentialRampToValueAtTime(peak, t0+attack);
+    amp.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+
+    src.connect(f1); f1.connect(amp);
+    src.connect(f2); f2.connect(f2gain); f2gain.connect(amp);
+    amp.connect(voicesBus);
+
+    src.start(t0); src.stop(t0+dur+0.02);
+
+    // consonant attack: brief filtered noise burst before the vowel for hard
+    // onsets (k/t/s/d/g/z/b/p); soft onsets (m/n/y/w/h/'') skip the burst.
+    if (cons && CONS_HARD.indexOf(cons) >= 0) {
+      var nbuf = noiseBurst(0.025);
+      var nsrc = ctx.createBufferSource(); nsrc.buffer = nbuf;
+      var nf = ctx.createBiquadFilter();
+      nf.type = (cons==='s'||cons==='z') ? 'highpass' : 'bandpass';
+      nf.frequency.value = (cons==='s'||cons==='z') ? 4000 : 1800;
+      nf.Q.value = 1.2;
+      var ng = ctx.createGain(); ng.gain.value = 0.0001;
+      ng.gain.setValueAtTime(0.0001, t0);
+      ng.gain.exponentialRampToValueAtTime(0.22*gainScale, t0+0.004);
+      ng.gain.exponentialRampToValueAtTime(0.0001, t0+0.03);
+      nsrc.connect(nf); nf.connect(ng); ng.connect(voicesBus);
+      nsrc.start(t0); nsrc.stop(t0+0.04);
+    }
+    // breathiness: low-level noise wash under the vowel
+    if (emo.breath > 0) {
+      var bbuf = noiseBurst(dur+0.02);
+      var bsrc = ctx.createBufferSource(); bsrc.buffer = bbuf;
+      var bf = ctx.createBiquadFilter(); bf.type='bandpass'; bf.frequency.value = fm[0]*1.4; bf.Q.value=0.7;
+      var bg = ctx.createGain(); bg.gain.value=0.0001;
+      bg.gain.setValueAtTime(0.0001,t0);
+      bg.gain.exponentialRampToValueAtTime(0.08*emo.breath*gainScale, t0+attack);
+      bg.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+      bsrc.connect(bf); bf.connect(bg); bg.connect(voicesBus);
+      bsrc.start(t0); bsrc.stop(t0+dur+0.03);
+    }
+    return dur;
+  }
+
+  /* cached short noise buffers, reused across calls to avoid GC churn */
+  var noiseCache = {};
+  function noiseBurst(secs){
+    var key = Math.round(secs*1000);
+    if (noiseCache[key]) return noiseCache[key];
+    var ctxr = ctx, n = Math.max(1, Math.floor(ctxr.sampleRate*secs));
+    var buf = ctxr.createBuffer(1, n, ctxr.sampleRate);
+    var d = buf.getChannelData(0);
+    for (var i=0;i<n;i++) d[i] = (Math.random()*2-1) * (1 - i/n);
+    if (Object.keys(noiseCache).length < 12) noiseCache[key] = buf;
+    return buf;
+  }
+
+  /* laughing / stutter burst: rapid string of short open-vowel pulses */
+  function synthLaugh(t0, basePitch, emo, gainScale){
+    var n = 2 + ((Math.random()*3)|0);
+    var t = t0, total = 0;
+    for (var i=0;i<n;i++){
+      var v = pick(['a','e','o']);
+      var d = synthMora(t, basePitch*(1+0.05*i), Object.assign({},emo,{dur:0.07,jit:0.03,vibrato:0.05}), v, '', gainScale*(1-i*0.08));
+      t += d*0.7 + 0.045 + Math.random()*0.02;
+      total += d;
+    }
+    return t - t0;
+  }
+
+  /* ---------------- per-voice phrase scheduler ----------------
+     A "phrase" is a short run of 2-5 morae forming one utterance,
+     followed by a pause. Stutter/imperfection: occasional truncated
+     mora, occasional repeated mora, occasional mid-phrase micro-pause. */
+  function schedulePhrase(voice, t0){
+    var emo = EMO[voice.emotion] || EMO.idle;
+    var n = 2 + ((Math.random()*3)|0);
+    var t = t0;
+    if (emo.burst > 0 && Math.random() < emo.burst) {
+      t += synthLaugh(t, voice.pitch, emo, voice.gain);
+    } else {
+      var lastVowel = null;
+      for (var i=0;i<n;i++){
+        var cons = (Math.random()<0.75) ? pick(CONS_HARD.concat(CONS_SOFT)) : '';
+        var vowel = pick(VOWELS);
+        // mild repetition imperfection: sometimes echo the previous vowel (stammer-ish)
+        if (lastVowel && Math.random()<0.08) vowel = lastVowel;
+        lastVowel = vowel;
+        var dur = synthMora(t, voice.pitch, emo, vowel, cons, voice.gain);
+        t += dur + emo.gap*(0.6+Math.random()*0.8);
+        // rare micro-pause mid-phrase (hesitation)
+        if (Math.random() < 0.06) t += 0.06 + Math.random()*0.08;
+      }
+    }
+    var phraseLen = t - t0;
+    var restMin = 1.4/emo.rate, restMax = 3.2/emo.rate;
+    voice.nextAt = t + restMin + Math.random()*(restMax-restMin);
+    return phraseLen;
+  }
+
+  /* social ping-pong: two nearby voices alternate within ~0.3-0.7s of each other */
+  function maybeChainReply(voice, t0){
+    if (voice.emotion !== 'social') return;
+    var partner = findNearestVoice(voice, 2.2);
+    if (!partner) return;
+    partner.emotion = 'social';
+    partner.nextAt = t0 + 0.25 + Math.random()*0.35;
+    partner.replyChain = (partner.replyChain||0) + 1;
+  }
+
+  /* ---------------- voice pool ----------------
+     One lightweight "voice" record per audible agent. Pool is rebuilt from
+     residents/traffic each gather pass rather than persisted per-agent,
+     keeping this decoupled from sim object lifecycles. */
+  var pool = []; // {id, x, y, emotion, pitch, gain, nextAt, agentRef}
+  var poolIndex = {};
+  var MAX_CONCURRENT = 10;     // hard cap on simultaneously scheduled voices
+  var GATHER_INTERVAL = 0.6;   // seconds between full re-gather passes
+  var gatherT = 0;
+
+  function pitchForAgent(a, seed){
+    // stable per-agent pitch variance so the same townsperson sounds consistent
+    var h = seed % 1000 / 1000;
+    return 150 + h*70; // 150-220 Hz base mora pitch, modest "voice" range
+  }
+
+  function emotionForAgent(a){
+    if (a.flee > 0) return 'scared';
+    if (a.nerve !== undefined) return a.respectful ? 'curious' : 'worried';
+    if (a.watch > 0) return 'curious';
+    var rg = (typeof inRaidRadius==='function') ? inRaidRadius(a) : nearAnyEncounter(a, 5);
+    if (rg) return 'worried';
+    if (a.act==='temple' || a.act==='water') return Math.random()<0.5 ? 'idle' : 'curious';
+    if (a.pause>0 && Math.random()<0.4) return 'social';
+    if (Math.random()<0.08) return 'happy';
+    return 'idle';
+  }
+
+  function nearAnyEncounter(a, radius){
+    if (typeof encounters === 'undefined') return false;
+    for (var i=0;i<encounters.length;i++){
+      var e = encounters[i]; if (!e.mob) continue;
+      for (var j=0;j<e.mob.length;j++){
+        var m = e.mob[j];
+        var dx = m.x-a.x, dy = m.y-a.y;
+        if (dx*dx+dy*dy < radius*radius) return true;
+      }
+    }
+    return false;
+  }
+
+  // raid combat states bump aggression/fear sharply for involved defenders
+  function defenderEmotion(d){
+    if (!d) return null;
+    if (d.state==='down') return null; // fallen, silent
+    return Math.random()<0.6 ? 'aggressive' : 'scared';
+  }
+
+  function findNearestVoice(voice, maxDist){
+    var best=null, bd=maxDist*maxDist;
+    for (var i=0;i<pool.length;i++){
+      var v = pool[i]; if (v===voice) continue;
+      var dx=v.x-voice.x, dy=v.y-voice.y, d2=dx*dx+dy*dy;
+      if (d2<bd){bd=d2;best=v;}
+    }
+    return best;
+  }
+
+  function worldToScreenDist(){
+    // camera-space distance scale: at high zoom agents are "close" so audibility
+    // is primarily zoom-gated globally, not per-agent panned (kept deliberately
+    // simple/atmospheric per spec — no per-voice stereo pan/falloff).
+    return 1;
+  }
+
+  function gatherVoices(){
+    var list = [];
+    if (typeof residents !== 'undefined') {
+      for (var i=0;i<residents.length;i++){
+        var r = residents[i]; if (r.claimed) continue;
+        list.push({ ref:r, kind:'res', idx:i });
+      }
+    }
+    if (typeof traffic !== 'undefined') {
+      for (var j=0;j<traffic.length;j++){
+        var a = traffic[j]; if (a.kind!=='ped' || a.claimed) continue;
+        list.push({ ref:a, kind:'trf', idx:j });
+      }
+    }
+    // include active raid defenders directly (combat barks)
+    if (typeof encounters !== 'undefined') {
+      for (var k=0;k<encounters.length;k++){
+        var e = encounters[k];
+        if (e.defenders) for (var d=0;d<e.defenders.length;d++){
+          var def = e.defenders[d]; if (def.state==='down') continue;
+          list.push({ ref:def, kind:'def', idx:'e'+k+'d'+d, forceEmotion:defenderEmotion(def) });
+        }
+      }
+    }
+    return list;
+  }
+
+  function rebuildPool(){
+    var raw = gatherVoices();
+    var n = Math.min(raw.length, MAX_CONCURRENT*3); // keep a slightly larger pool than concurrent cap; scheduling self-throttles
+    // shuffle-sample so we don't always hear the same first-N agents
+    for (var i=raw.length-1;i>0;i--){ var j=(Math.random()*(i+1))|0; var tmp=raw[i]; raw[i]=raw[j]; raw[j]=tmp; }
+    raw = raw.slice(0, n);
+
+    var seen = {};
+    for (var k=0;k<raw.length;k++){
+      var item = raw[k], a = item.ref;
+      var key = item.kind+item.idx;
+      seen[key] = true;
+      var v = poolIndex[key];
+      if (!v) {
+        v = { key:key, x:a.x, y:a.y, pitch:pitchForAgent(a, (k*977+13)%1000), gain:0.55+Math.random()*0.3, nextAt:0, replyChain:0 };
+        poolIndex[key] = v;
+        pool.push(v);
+      }
+      v.x = a.x; v.y = a.y; v.agentRef = a;
+      v.emotion = item.forceEmotion || emotionForAgent(a);
+    }
+    // prune voices whose agents vanished
+    for (var p=pool.length-1;p>=0;p--){
+      if (!seen[pool[p].key]) { delete poolIndex[pool[p].key]; pool.splice(p,1); }
+    }
+  }
+
+  /* ---------------- master gain follows zoom ---------------- */
+  var curVol = 0;
+  function updateMasterGain(dt){
+    if (!ctx || !master) return;
+    var target = zoomAudibility() * 0.34; // overall ceiling — kept subtle/atmospheric
+    var rate = 2.0; // smoothing speed
+    curVol += (target-curVol) * Math.min(1, dt*rate);
+    if (Math.abs(curVol - master.gain.value) > 0.001) {
+      var now = ctx.currentTime;
+      master.gain.cancelScheduledValues(now);
+      master.gain.setTargetAtTime(curVol, now, 0.12);
+    }
+  }
+
+  /* ---------------- main tick ----------------
+     Call updateGibberish(dt) once per frame from the existing sim loop.
+     Internally throttles: agent gathering is periodic, scheduling is
+     per-voice and respects nextAt timestamps. Entirely inert at zero volume
+     (still schedules silently rather than skip, so re-entering zoom range
+     doesn't produce a jarring sudden cluster — acceptable tiny cost). */
+  var activeCount = 0;
+  function updateGibberish(dt){
+    var audibility = zoomAudibility();
+    if (audibility <= 0.001) {
+      if (ctx && master) updateMasterGain(dt);
+      return; // fully silent at this zoom — skip scheduling entirely, cheapest path
+    }
+    if (!ensureCtx()) return;
+    updateMasterGain(dt);
+
+    gatherT += dt;
+    if (gatherT >= GATHER_INTERVAL || pool.length===0) { gatherT = 0; rebuildPool(); }
+
+    var now = ctx.currentTime;
+    activeCount = 0;
+    for (var i=0;i<pool.length && activeCount < MAX_CONCURRENT;i++){
+      var v = pool[i];
+      if (v.nextAt <= now + 0.02) {
+        // stagger scheduling slightly so MAX_CONCURRENT isn't all triggered the same tick
+        var startAt = now + Math.random()*0.05;
+        var len = schedulePhrase(v, startAt);
+        maybeChainReply(v, startAt+len);
+        activeCount++;
+      } else if (v.nextAt < now + 1.5) {
+        activeCount++; // counts as "soon active" for concurrency budgeting
+      }
+    }
+  }
+
+  /* ---------------- event hooks ----------------
+     Raid/disaster triggers an immediate localized panic burst rather than
+     waiting for the next natural gather/schedule cycle. Call directly from
+     existing raid trigger sites (e.g. inside the same function that calls
+     scatterWitnesses), or rely on emotionForAgent picking it up next tick —
+     both paths are safe; this just removes latency for the player who is
+     already zoomed in when a raid lands. */
+  function onRaidEvent(tx, ty, radius){
+    if (zoomAudibility() <= 0.001 || !ctx) return;
+    radius = radius || 6.5;
+    var now = ctx.currentTime;
+    var burst = 0;
+    for (var i=0;i<pool.length && burst<4;i++){
+      var v = pool[i];
+      var dx=v.x-tx, dy=v.y-ty;
+      if (dx*dx+dy*dy < radius*radius) {
+        v.emotion = 'scared';
+        v.nextAt = now + Math.random()*0.4;
+        burst++;
+      }
+    }
+  }
+
+  /* ---------------- public API ---------------- */
+  window.SoruGibberish = {
+    update: updateGibberish,   // call once per frame, e.g. inside loop(): updateGibberish(dt)
+    onRaidEvent: onRaidEvent,  // optional direct hook from raid-trigger code
+    setEnabled: function(on){ enabledOverride = !!on; },
+    _debug: { pool: pool, zoomAudibility: zoomAudibility }
+  };
+  var enabledOverride = true;
+
+  // Hook into the existing first-gesture unlock so AudioContext resumes
+  // alongside BGM/SFX rather than needing a second user gesture.
+  function tryResume(){ if (ctx && ctx.state==='suspended') ctx.resume(); }
+  window.addEventListener('pointerdown', tryResume, {passive:true});
+
+})();
+</script>
+
 </body>
 </html>
