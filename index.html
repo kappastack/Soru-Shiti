@@ -4015,12 +4015,13 @@ const BGM_TARGET_VOL=0.16;
 let bgmGain=null,bgmSrc=null,bgmBuf=null,bgmOn=false,bgmLoading=false,bgmReady=false;
 function bgmEnsureGraph(){ const ctx=sfxCtx(); if(!ctx||bgmGain)return ctx; bgmGain=ctx.createGain(); bgmGain.gain.value=0; bgmGain.connect(ctx.destination); return ctx; }
 async function bgmLoadBuffer(){ if(bgmBuf||bgmLoading)return; bgmLoading=true; const ctx=bgmEnsureGraph(); if(!ctx){bgmLoading=false;return;}
-  try{ const res=await fetch(BGM_FILE); if(!res.ok)throw new Error('fetch '+res.status); const ab=await res.arrayBuffer(); bgmBuf=await ctx.decodeAudioData(ab); bgmReady=true; }
+  const bgmURL=new URL(BGM_FILE,document.baseURI).href;
+  try{ const res=await fetch(BGM_FILE); if(!res.ok)throw new Error('HTTP '+res.status+' at '+bgmURL); const ab=await res.arrayBuffer(); bgmBuf=await ctx.decodeAudioData(ab); bgmReady=true; }
   catch(e){
     if(typeof BGM_DATA_URI==='string'){                       // legacy fallback for older saved copies carrying the inline payload
       try{ const res2=await fetch(BGM_DATA_URI); const ab2=await res2.arrayBuffer(); bgmBuf=await ctx.decodeAudioData(ab2); bgmReady=true; }
-      catch(e2){ bgmReady=false; if(window.__err)window.__err('bgm load failed: '+(e2.message||e2)); }
-    } else { bgmReady=false; if(window.__err)window.__err('bgm load failed: '+(e.message||e)); }
+      catch(e2){ bgmReady=false; const m='bgm load failed: '+(e2.message||e2); if(window.__err)window.__err(m); console.warn(m); }
+    } else { bgmReady=false; const m='bgm missing/unreadable: '+BGM_FILE+' — looked for it at '+bgmURL+' ('+(e.message||e)+')'; if(window.__err)window.__err(m); console.warn(m); }
   }
   bgmLoading=false; }
 function bgmStartSource(){ const ctx=bgmEnsureGraph(); if(!ctx||!bgmBuf)return;
@@ -4604,8 +4605,12 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     var c = ensureCtx();
     if (!c) return;
     loadingNow[filename] = true;
+    // resolves filename against index.html's own URL so the printed path is
+    // exactly where the browser looked — makes "file is missing" vs "file is
+    // at the wrong path" unambiguous instead of guessing from a bare name.
+    var resolvedURL = new URL(filename, document.baseURI).href;
     fetch(filename).then(function(res){
-      if (!res.ok) throw new Error('fetch '+res.status);
+      if (!res.ok) throw new Error('HTTP '+res.status+' at '+resolvedURL);
       return res.arrayBuffer();
     }).then(function(ab){
       return c.decodeAudioData(ab);
@@ -4615,13 +4620,34 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     }).catch(function(e){
       loadFailed[filename] = true;
       loadingNow[filename] = false;
-      if (window.__err) window.__err('gibberish sample load failed: '+filename+' ('+(e.message||e)+')');
+      var msg = 'gibberish sample missing/unreadable: '+filename+' — looked for it at '+resolvedURL+' ('+(e.message||e)+')';
+      if (window.__err) window.__err(msg);
+      else console.warn(msg);
     });
   }
 
   function preloadAll(){
     for (var i=0;i<FEMALE_FILES.length;i++) loadSample(FEMALE_FILES[i]);
     for (var j=0;j<MALE_FILES.length;j++) loadSample(MALE_FILES[j]);
+  }
+
+  /* One consolidated readiness report, a couple seconds after the first
+     preload pass, so missing assets show up as a single list instead of
+     N separate console lines arriving one fetch-failure at a time. */
+  var manifestReported = false;
+  function reportManifestOnce(){
+    if (manifestReported) return;
+    manifestReported = true;
+    setTimeout(function(){
+      var all = FEMALE_FILES.concat(MALE_FILES);
+      var missing = all.filter(function(f){ return loadFailed[f]; });
+      var loaded = all.filter(function(f){ return !!bufferCache[f]; });
+      var pending = all.filter(function(f){ return !bufferCache[f] && !loadFailed[f]; });
+      var summary = '[SoruGibberish] audio manifest — loaded:'+loaded.length+'/'+all.length+
+        (missing.length ? '  MISSING: '+missing.join(', ') : '') +
+        (pending.length ? '  still loading: '+pending.join(', ') : '');
+      if (missing.length) console.warn(summary); else console.log(summary);
+    }, 2500);
   }
 
   /* ---------------- one sample playback ----------------
@@ -4826,7 +4852,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
       return; // fully silent at this zoom — skip scheduling entirely, cheapest path
     }
     if (!ensureCtx()) return;
-    if (!preloaded) { preloaded = true; preloadAll(); }
+    if (!preloaded) { preloaded = true; preloadAll(); reportManifestOnce(); }
     updateMasterGain(dt);
 
     gatherT += dt;
