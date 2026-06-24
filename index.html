@@ -4070,6 +4070,7 @@ function loop(t){ const dt=lastT?Math.min(0.05,(t-lastT)/1000):0; lastT=t; fx=t;
     if(bootFitT<2.2){ bootFitT+=dt; const h=Math.round(cv.getBoundingClientRect().height)||0; if(h>0&&h!==lastVPH){ lastVPH=h; resize(); fit(); } }
     updateEnv(dt); updateTraffic(dt); updateResidents(dt); updateApparitions(dt); updateEncounters(dt); updateCorpses(dt); updateGore(dt); updateDecay(dt);
     if(window.SoruGibberish) window.SoruGibberish.update(dt);
+    if(window.SoruAmbientZoom) window.SoruAmbientZoom.update(dt);
     tickAcc+=dt; if(tickAcc>=1.5){tickAcc=0;tick();}
     fireAcc+=dt; if(fireAcc>=40){fireAcc=0; if(S.pop>90&&Math.random()<0.18)igniteRandom();}
     render();
@@ -5510,6 +5511,209 @@ window.YokaiSFX={
   interaction: ykOnInteraction,
   setVolume: function(v){ if(typeof optSet==='function') optSet('opt_yokaiVol', Math.max(0,Math.min(1,v))); }
 };
+
+})();
+</script>
+
+<script id="ykAmbientZoom">
+/* ============================================================
+   SORU SHITI — Zoomed-Out Ambient Soundscape
+   Synthesized Web Audio API. No external assets.
+   Audible only near full zoom-out; fades to silence as the
+   player zooms in. Reads cam.zoom only — writes nothing back.
+   ============================================================ */
+(function(){
+  "use strict";
+  if (window.__ambientZoom) return; window.__ambientZoom = true;
+
+  /* ---- zoom gate ----
+     ZMIN=0.4 / ZMAX=2.6 in this project. Full presence at/near ZMIN,
+     gone by AZ_HIGH. Smoothstep so it breathes rather than snaps. */
+  var AZ_LOW  = 0.4;
+  var AZ_HIGH = 0.85;
+  function zoomAudibility(){
+    var z = (typeof cam !== 'undefined' && cam.zoom) ? cam.zoom : 1;
+    if (z <= AZ_LOW) return 1;
+    if (z >= AZ_HIGH) return 0;
+    var t = (z - AZ_LOW) / (AZ_HIGH - AZ_LOW);
+    t = t*t*(3-2*t);
+    return 1 - t;
+  }
+
+  var ctx = null, master = null, windBus = null, birdBus = null, textureBus = null;
+  function ensureCtx(){
+    if (ctx) { if (ctx.state==='suspended') ctx.resume(); return ctx; }
+    try {
+      ctx = (typeof sfxCtx === 'function') ? sfxCtx() : new (window.AudioContext||window.webkitAudioContext)();
+    } catch(e){ ctx = null; }
+    if (!ctx) return null;
+    master = ctx.createGain(); master.gain.value = 0;
+    windBus = ctx.createGain(); windBus.gain.value = 0.16;
+    birdBus = ctx.createGain(); birdBus.gain.value = 0.22;
+    textureBus = ctx.createGain(); textureBus.gain.value = 0.1;
+    windBus.connect(master); birdBus.connect(master); textureBus.connect(master);
+    master.connect((typeof sfxDest==='function') ? sfxDest(ctx) : ctx.destination);
+    return ctx;
+  }
+
+  function mkNoiseBuffer(c, dur){
+    var sr = c.sampleRate, n = Math.max(1, Math.floor(sr*dur));
+    var buf = c.createBuffer(1, n, sr), d = buf.getChannelData(0);
+    for (var i=0;i<n;i++) d[i] = Math.random()*2-1;
+    return buf;
+  }
+
+  /* ---- WIND: looping filtered noise bed with slow LFO wander on both
+     filter cutoff and gain, so it never sits perfectly static. ---- */
+  var wind = null;
+  function startWind(c){
+    if (wind) return;
+    var src = c.createBufferSource();
+    src.buffer = mkNoiseBuffer(c, 6);
+    src.loop = true;
+
+    var bp = c.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 320; bp.Q.value = 0.5;
+
+    var g = c.createGain(); g.gain.value = 0.0001;
+
+    var lfo = c.createOscillator(); lfo.frequency.value = 0.05;
+    var lfoGain = c.createGain(); lfoGain.gain.value = 60;
+    lfo.connect(lfoGain); lfoGain.connect(bp.frequency);
+
+    var lfo2 = c.createOscillator(); lfo2.frequency.value = 0.035;
+    var lfo2Gain = c.createGain(); lfo2Gain.gain.value = 0.3;
+    var lfo2Off = c.createConstantSource(); lfo2Off.offset.value = 1;
+    var gMul = c.createGain(); gMul.gain.value = 1;
+    lfo2.connect(lfo2Gain); lfo2Gain.connect(gMul.gain);
+    lfo2Off.connect(gMul.gain);
+
+    src.connect(bp).connect(g).connect(windBus);
+    var t0 = c.currentTime;
+    lfo.start(t0); lfo2.start(t0); lfo2Off.start(t0);
+    src.start(t0);
+    g.gain.setTargetAtTime(0.55, t0, 2.5);
+
+    wind = { src: src, gain: g, lfo: lfo, lfo2: lfo2, lfo2Off: lfo2Off };
+  }
+  function stopWind(){
+    if (!wind) return;
+    try {
+      var t = ctx.currentTime;
+      wind.gain.gain.setTargetAtTime(0.0001, t, 0.4);
+      wind.src.stop(t+1.2); wind.lfo.stop(t+1.2); wind.lfo2.stop(t+1.2); wind.lfo2Off.stop(t+1.2);
+    } catch(e){}
+    wind = null;
+  }
+
+  /* ---- BIRDS: sparse, randomly scheduled chirps. Each chirp is a short
+     pitch-glide tone burst, panned, with long randomized silence between. ---- */
+  var birdTimer = 0, birdNextAt = 8 + Math.random()*14;
+  function fireBird(c){
+    var t0 = c.currentTime;
+    var n = (Math.random()<0.75) ? 1 : 2;
+    for (var i=0;i<n;i++){
+      var dt0 = t0 + i*(0.1+Math.random()*0.08);
+      var osc = c.createOscillator(); osc.type = 'sine';
+      var f0 = 2200 + Math.random()*1600;
+      var f1 = f0 * (0.6+Math.random()*0.45);
+      osc.frequency.setValueAtTime(f0, dt0);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(f1,200), dt0+0.09+Math.random()*0.06);
+
+      var g = c.createGain();
+      g.gain.setValueAtTime(0.0001, dt0);
+      g.gain.exponentialRampToValueAtTime(0.11, dt0+0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, dt0+0.14+Math.random()*0.08);
+
+      var hp = c.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=1200;
+
+      try {
+        var pan = c.createStereoPanner(); pan.pan.value = (Math.random()*2-1);
+        osc.connect(hp).connect(g).connect(pan).connect(birdBus);
+      } catch(e){
+        osc.connect(hp).connect(g).connect(birdBus);
+      }
+      osc.start(dt0); osc.stop(dt0+0.3);
+    }
+  }
+  function updateBirds(dt, audibility){
+    if (audibility <= 0.01) { birdTimer = 0; return; }
+    birdTimer += dt;
+    if (birdTimer >= birdNextAt){
+      birdTimer = 0;
+      birdNextAt = 10 + Math.random()*20;
+      if (Math.random() < 0.7) fireBird(ctx);
+    }
+  }
+
+  /* ---- DISTANT NATURE TEXTURE: very low, slow-shifting filtered noise,
+     separate band from wind so it reads as ground/foliage rustle rather
+     than air movement. Mostly static with slow gentle swells. ---- */
+  var texture = null;
+  function startTexture(c){
+    if (texture) return;
+    var src = c.createBufferSource();
+    src.buffer = mkNoiseBuffer(c, 8);
+    src.loop = true;
+
+    var bp = c.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 1100; bp.Q.value = 0.9;
+
+    var g = c.createGain(); g.gain.value = 0.0001;
+
+    var lfo = c.createOscillator(); lfo.frequency.value = 0.025;
+    var lfoGain = c.createGain(); lfoGain.gain.value = 0.5;
+    var lfoOff = c.createConstantSource(); lfoOff.offset.value = 0.55;
+    var gMul = c.createGain(); gMul.gain.value = 1;
+    lfo.connect(lfoGain); lfoGain.connect(gMul.gain);
+    lfoOff.connect(gMul.gain);
+
+    src.connect(bp).connect(g).connect(textureBus);
+    var t0 = c.currentTime;
+    lfo.start(t0); lfoOff.start(t0);
+    src.start(t0);
+    g.gain.setTargetAtTime(0.5, t0, 3);
+
+    texture = { src: src, gain: g, lfo: lfo, lfoOff: lfoOff };
+  }
+  function stopTexture(){
+    if (!texture) return;
+    try {
+      var t = ctx.currentTime;
+      texture.gain.gain.setTargetAtTime(0.0001, t, 0.4);
+      texture.src.stop(t+1.2); texture.lfo.stop(t+1.2); texture.lfoOff.stop(t+1.2);
+    } catch(e){}
+    texture = null;
+  }
+
+  /* ---- master fade + lazy start/stop so nothing runs (no oscillators,
+     no scheduling) while fully zoomed in. ---- */
+  var active = false;
+  var BASE_VOL = 0.22;
+  function update(dt){
+    var aud = zoomAudibility();
+    if (aud > 0.001 && !active){
+      var c = ensureCtx();
+      if (c){ startWind(c); startTexture(c); active = true; }
+    }
+    if (active && ctx){
+      var target = aud * BASE_VOL;
+      master.gain.setTargetAtTime(Math.max(target,0.0001), ctx.currentTime, 0.6);
+      updateBirds(dt, aud);
+      if (aud <= 0.001){
+        stopWind(); stopTexture(); active = false;
+      }
+    }
+  }
+
+  function tryResume(){ if (ctx && ctx.state==='suspended') ctx.resume(); }
+  window.addEventListener('pointerdown', tryResume, {passive:true});
+
+  window.SoruAmbientZoom = {
+    update: update,
+    setBaseVolume: function(v){ BASE_VOL = Math.max(0,Math.min(1,v)); },
+    _debug: { zoomAudibility: zoomAudibility, ensureCtx: ensureCtx }
+  };
 
 })();
 </script>
