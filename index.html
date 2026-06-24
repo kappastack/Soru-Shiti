@@ -4531,28 +4531,35 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
                        'm-happy.ogg','m-sad.ogg','m-weird1.ogg','m-weird2.ogg'];
 
   /* emotion -> which files are appropriate, per gender bank.
-     calm/chatty default pool is the *-chatN / *-happy / *-sad files;
-     raids pull from the more aggressive/scared-sounding set. */
+     Peacetime pool leans calm/chatty/happy/weird-curious. Raid-context
+     emotions (aggressive/scared/sad) deliberately exclude laugh/happy
+     files entirely — never want a giggle clip during a sacking. */
   var FEMALE_BANK = {
-    idle:    ['f-chat1.ogg'],
-    social:  ['f-chat1.ogg','f-happy1.ogg'],
-    happy:   ['f-happy1.ogg','f-laugh1.ogg','f-laugh2.ogg'],
-    laugh:   ['f-laugh1.ogg','f-laugh2.ogg'],
-    worried: ['f-chat1.ogg','f-sad.ogg'],
-    sad:     ['f-sad.ogg'],
-    scared:  ['f-sad.ogg'],
-    curious: ['f-chat1.ogg']
+    idle:      ['f-chat1.ogg'],
+    social:    ['f-chat1.ogg','f-happy1.ogg'],
+    happy:     ['f-happy1.ogg','f-laugh1.ogg','f-laugh2.ogg'],
+    laugh:     ['f-laugh1.ogg','f-laugh2.ogg'],
+    curious:   ['f-chat1.ogg'],
+    worried:   ['f-sad.ogg'],
+    sad:       ['f-sad.ogg'],
+    scared:    ['f-sad.ogg'],
+    aggressive:['f-sad.ogg']   // no female-angry sample exists; sad bank reused, pitched up at playback
   };
   var MALE_BANK = {
     idle:      ['m-chat1.ogg','m-chat2.ogg','m-chat3.ogg','m-chat4.ogg'],
     social:    ['m-chat1.ogg','m-chat2.ogg','m-chat3.ogg','m-chat4.ogg','m-happy.ogg'],
     happy:     ['m-happy.ogg'],
     laugh:     ['m-happy.ogg'],
-    worried:   ['m-chat1.ogg','m-weird1.ogg','m-weird2.ogg'],
-    aggressive:['m-angry.ogg'],
+    curious:   ['m-chat1.ogg','m-weird1.ogg'],
+    worried:   ['m-weird1.ogg','m-weird2.ogg','m-sad.ogg'],
+    sad:       ['m-sad.ogg'],
     scared:    ['m-weird1.ogg','m-weird2.ogg'],
-    curious:   ['m-chat1.ogg','m-weird1.ogg']
+    aggressive:['m-angry.ogg','m-weird1.ogg','m-weird2.ogg']
   };
+
+  // raid-context emotions get pitch/speed pushed harder so the reused
+  // sad/weird samples read as scared or aggressive rather than just sad.
+  var RAID_PITCH_BOOST = { aggressive:true, scared:true };
 
   function pick(arr){ return arr[(Math.random()*arr.length)|0]; }
 
@@ -4655,12 +4662,14 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      the simplest way to keep repeated clips from sounding identical),
      volume, and a tiny start offset so back-to-back plays of the same
      file don't phase-lock against each other. */
-  function playSample(filename, t0, gainScale){
+  function playSample(filename, t0, gainScale, raidBoost){
     var buf = bufferCache[filename];
     if (!buf || !ctx) return 0;
     var src = ctx.createBufferSource();
     src.buffer = buf;
-    var rate = 0.9 + Math.random()*0.25;       // playback speed/pitch jitter
+    var rate = raidBoost
+      ? 1.12 + Math.random()*0.28   // faster/higher to sell scared/aggressive off reused samples
+      : 0.9 + Math.random()*0.25;   // normal playback speed/pitch jitter
     src.playbackRate.value = rate;
 
     var amp = ctx.createGain();
@@ -4681,11 +4690,16 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
   /* ---------------- per-voice phrase scheduler ----------------
      A "phrase" here is exactly one sample clip (the source files are
      already short, self-contained utterances), followed by a pause
-     whose length depends on the emotion's chattiness. */
+     whose length depends on the emotion's chattiness. Rates are kept
+     low across the board — this is meant to read as occasional
+     background texture, not a crowd of constant chatter. */
   var EMO_RATE = { // phrases per ~second equivalent, used to derive rest length
-    idle:0.28, social:0.34, happy:0.4, laugh:0.5, worried:0.32,
-    sad:0.22, aggressive:0.5, scared:0.55, curious:0.3
+    idle:0.10, social:0.14, happy:0.13, laugh:0.16, curious:0.11,
+    worried:0.12, sad:0.09, aggressive:0.20, scared:0.22
   };
+  // global multiplier on top of EMO_RATE rest windows — this is the main
+  // sparsity dial; raise restMin/restMax scale to make the world quieter.
+  var REST_SCALE = 1.0;
 
   function bankForVoice(voice){ return voice.gender==='f' ? FEMALE_BANK : MALE_BANK; }
 
@@ -4694,12 +4708,13 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     var pool = bank[voice.emotion] || bank.idle;
     var filename = pick(pool);
     loadSample(filename); // ensure it's loading/loaded for next time even if this attempt misses
+    var raidBoost = !!RAID_PITCH_BOOST[voice.emotion];
     var dur = 0;
     if (bufferCache[filename]) {
-      dur = playSample(filename, t0, voice.gain);
+      dur = playSample(filename, t0, voice.gain, raidBoost);
     }
     var rate = EMO_RATE[voice.emotion] || EMO_RATE.idle;
-    var restMin = 1.6/rate, restMax = 3.6/rate;
+    var restMin = (2.6/rate) * REST_SCALE, restMax = (5.5/rate) * REST_SCALE;
     voice.nextAt = t0 + Math.max(dur,0.2) + restMin + Math.random()*(restMax-restMin);
     return dur;
   }
@@ -4719,7 +4734,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      -agent, keeping this decoupled from sim object lifecycles. */
   var pool = []; // {key, x, y, emotion, gender, gain, nextAt, agentRef}
   var poolIndex = {};
-  var MAX_CONCURRENT = 6;      // hard cap on simultaneously scheduled voices — kept sparse/atmospheric
+  var MAX_CONCURRENT = 3;      // hard cap on simultaneously scheduled voices — kept sparse/atmospheric
   var GATHER_INTERVAL = 0.6;   // seconds between full re-gather passes
   var gatherT = 0;
 
@@ -4730,14 +4745,14 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
 
   function emotionForAgent(a){
     if (a.flee > 0) return 'scared';
-    if (a.nerve !== undefined) return a.respectful ? 'curious' : 'worried';
-    if (a.watch > 0) return 'curious';
+    if (a.nerve !== undefined) return a.respectful ? 'worried' : 'aggressive';
+    if (a.watch > 0) return 'worried';
     var rg = (typeof inRaidRadius==='function') ? inRaidRadius(a) : nearAnyEncounter(a, 5);
-    if (rg) return 'worried';
+    if (rg) return Math.random()<0.5 ? 'scared' : 'sad'; // raid-adjacent: never happy/social/laugh
     if (a.act==='temple' || a.act==='water') return Math.random()<0.5 ? 'idle' : 'curious';
     if (a.pause>0 && Math.random()<0.4) return 'social';
-    if (Math.random()<0.06) return 'happy';
-    if (Math.random()<0.04) return 'sad';
+    if (Math.random()<0.045) return 'happy';
+    if (Math.random()<0.03) return 'sad';
     return 'idle';
   }
 
