@@ -3190,6 +3190,7 @@ function updateDefenders(e,dt){ if(!e.defenders)return;
 function landHit(e,m,tgt){ tgt.state='struck'; tgt.t=0; tgt.recoilDX=(m.dir||1)*0.3; tgt.recoilDY=-0.1;
   addSpray(tgt.x,tgt.y,7+((Math.random()*6)|0), 1.0+(m.swingType==='sweep'?0.5:m.swingType==='thrust'?0.3:0));
   e.struck=(e.struck||0)+1;
+  if(window.SoruBattleSFX) window.SoruBattleSFX.impact();
   if(typeof toast==='function' && e.struck===1) toast('🩸 Steel finds flesh','the household falls under the blades'); }
 
 /* mirror of landHit, but the VICTIM is an attacking ronin — fired when an armed guard's
@@ -3198,6 +3199,7 @@ function landHit(e,m,tgt){ tgt.state='struck'; tgt.t=0; tgt.recoilDX=(m.dir||1)*
 function landHitOnRonin(e,guard,ronin){ ronin.hp=(ronin.hp==null?1:ronin.hp)-1;
   ronin.flinchT=0.22; ronin.dir=(guard.dir||1)*-1;
   addSpray(ronin.x,ronin.y,6+((Math.random()*5)|0), 0.9+(guard.swingType==='sweep'?0.4:0));
+  if(window.SoruBattleSFX) window.SoruBattleSFX.impact();
   if(ronin.hp<=0 && ronin.state!=='down'){ ronin.state='down'; ronin.downT=0;
     addSpray(ronin.x,ronin.y,10+((Math.random()*6)|0),1.5); addStain(ronin.x,ronin.y,0.55+Math.random()*0.25);
     corpses.push({ x:ronin.x, y:ronin.y, t:0, life:26, lethal:true, skin:ronin.skin||'#d8ad82', col:ronin.col||'#2c2a30',
@@ -3209,11 +3211,13 @@ function landHitOnRonin(e,guard,ronin){ ronin.hp=(ronin.hp==null?1:ronin.hp)-1;
    Only runs for e.defenders that have .guard===true and only during 'duel' (the resistance-roll branch). */
 function guardCombatTick(e,d,dt,mob){
   if(d.wind>0){ d.wind-=dt; const tgt=mob[d.target]; if(tgt){ const dx=tgt.x-d.x; d.dir=dx<0?-1:1; }
-    if(d.wind<=0){ d.wind=0; d.swing=d.swingMax; d.hitFired=false; } return; }
+    if(d.wind<=0){ d.wind=0; d.swing=d.swingMax; d.hitFired=false; if(window.SoruBattleSFX) window.SoruBattleSFX.swing(); } return; }
   if(d.swing>0){ d.swing-=dt; const tgt=mob[d.target];
     if(tgt){ const dx=tgt.x-d.x; d.dir=dx<0?-1:1;
       const elapsed=1-(d.swing/(d.swingMax||0.4)), cf=(d.swingType==='thrust')?0.5:(d.swingType==='sweep'?0.6:0.65);
-      if(!d.hitFired && elapsed>=cf){ d.hitFired=true; if(tgt.state!=='down') landHitOnRonin(e,d,tgt); } }
+      if(!d.hitFired && elapsed>=cf){ d.hitFired=true;
+        if(tgt.state!=='down') landHitOnRonin(e,d,tgt);
+        else if(window.SoruBattleSFX) window.SoruBattleSFX.parry(); } }
     if(d.swing<=0){ d.swing=0; d.recover=0.22+Math.random()*0.14; } return; }
   if(d.recover>0){ d.recover-=dt; if(d.recover<0)d.recover=0; return; }
   if(d.target==null || !mob[d.target] || mob[d.target].state==='down'){
@@ -3232,11 +3236,13 @@ function roninCombatTick(e,m,dt,defenders,rtx,rty){
   if(m.state==='down') return;                                                          // dead weight — out of the fight
   if(m.flinchT>0){ m.flinchT-=dt; if(m.flinchT<=0)m.flinchT=0; return; }                  // staggered by a counter-hit
   if(m.wind>0){ m.wind-=dt; const tgt=defenders[m.target]; if(tgt){ const dx=tgt.x-m.x; m.dir=dx<0?-1:1; }
-    if(m.wind<=0){ m.wind=0; m.swing=m.swingMax; m.hitFired=false; } return; }
+    if(m.wind<=0){ m.wind=0; m.swing=m.swingMax; m.hitFired=false; if(window.SoruBattleSFX) window.SoruBattleSFX.swing(); } return; }
   if(m.swing>0){ m.swing-=dt; const tgt=defenders[m.target];
     if(tgt){ const dx=tgt.x-m.x; m.dir=dx<0?-1:1;
       const elapsed=1-(m.swing/(m.swingMax||0.4)), cf=(m.swingType==='thrust')?0.5:(m.swingType==='sweep'?0.6:0.65);
-      if(!m.hitFired && elapsed>=cf){ m.hitFired=true; if(tgt.state==='idle') landHit(e,m,tgt); } }
+      if(!m.hitFired && elapsed>=cf){ m.hitFired=true;
+        if(tgt.state==='idle') landHit(e,m,tgt);
+        else if(window.SoruBattleSFX) window.SoruBattleSFX.parry(); } }
     if(m.swing<=0){ m.swing=0; m.recover=0.22+Math.random()*0.14; } return; }
   if(m.recover>0){ m.recover-=dt; if(m.recover<0)m.recover=0; return; }
   if(m.target==null || !defenders[m.target] || defenders[m.target].state!=='idle'){
@@ -3281,6 +3287,13 @@ function updateRaid(e,dt,near){ e.st+=dt; const arson=e.raidAction==='arson'; co
     case 'duel': {                                          // a real two-sided skirmish — either side can break first
       for(const m of e.mob) roninCombatTick(e,m,dt,e.defenders,e.rtx,e.rty);
       for(const d of e.defenders) if(d.guard && d.state==='idle') guardCombatTick(e,d,dt,e.mob);
+      // ambient blade-on-blade texture while both sides still have fighters swinging —
+      // sparse and probabilistic so it reads as "a fight is happening nearby", not a metronome
+      if(window.SoruBattleSFX && Math.random()<dt*1.1){
+        const roninSwinging=e.mob.some(m=>m.state!=='down'&&(m.wind>0||m.swing>0));
+        const guardSwinging=e.defenders.some(d=>d.guard&&(d.wind>0||d.swing>0));
+        if(roninSwinging&&guardSwinging) window.SoruBattleSFX.clash();
+      }
       // tend struck defenders the same way the plain assault does (struck → down after 0.4s)
       for(const d of e.defenders){ if(d.state==='struck'){ d.t=(d.t||0)+dt; if(d.t>0.4){ raidKill(e,d.x,d.y); d.state='down'; } } }
       const defendersLeft=e.defenders.some(d=>d.state!=='down');
@@ -4719,11 +4732,11 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     if (!buf || !ctx) return 0;
     var src = ctx.createBufferSource();
     src.buffer = buf;
-    var rate = 0.9 + Math.random()*0.25;       // playback speed/pitch jitter
+    var rate = 0.78 + Math.random()*0.55;       // wider playback speed/pitch jitter (was 0.9-1.15)
     src.playbackRate.value = rate;
 
     var amp = ctx.createGain();
-    var peak = (0.55 + Math.random()*0.35) * gainScale;
+    var peak = (0.4 + Math.random()*0.55) * gainScale; // wider volume variation
     var dur = buf.duration / rate;
     var attack = Math.min(0.04, dur*0.15), release = Math.min(0.25, dur*0.35);
     amp.gain.setValueAtTime(0.0001, t0);
@@ -4731,7 +4744,16 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     amp.gain.setValueAtTime(peak, Math.max(t0+attack, t0+dur-release));
     amp.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
 
-    src.connect(amp); amp.connect(voicesBus);
+    var node = src;
+    try {
+      var filt = ctx.createBiquadFilter();
+      filt.type = (Math.random()<0.5) ? 'lowpass' : 'allpass';
+      filt.frequency.value = 900 + Math.random()*2600; // 900-3500Hz — subtle muffling/brightness variance
+      filt.Q.value = 0.6 + Math.random()*0.8;
+      src.connect(filt); filt.connect(amp);
+      node = filt;
+    } catch(e){ src.connect(amp); }
+    amp.connect(voicesBus);
     src.start(t0);
     src.stop(t0+dur+0.05);
     return dur;
@@ -4742,11 +4764,13 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      already short, self-contained utterances), followed by a pause
      whose length depends on the emotion's chattiness. */
   var EMO_RATE = { // phrases per ~second equivalent, used to derive rest length
-    idle:0.28, social:0.34, happy:0.4, laugh:0.5, worried:0.32,
-    sad:0.22, aggressive:0.5, scared:0.55, curious:0.3
+    idle:0.09, social:0.11, happy:0.12, laugh:0.14, worried:0.10,
+    sad:0.08, aggressive:0.16, scared:0.17, curious:0.09
   };
 
   function bankForVoice(voice){ return voice.gender==='f' ? FEMALE_BANK : MALE_BANK; }
+
+  var GLOBAL_MIN_GAP = 5.5; // seconds — absolute floor between any two phrases from the same voice, regardless of emotion rate
 
   function schedulePhrase(voice, t0){
     var bank = bankForVoice(voice);
@@ -4756,21 +4780,20 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     var dur = 0;
     if (bufferCache[filename]) {
       dur = playSample(filename, t0, voice.gain);
+      voiceActiveUntil = Math.max(voiceActiveUntil, t0 + dur);
     }
     var rate = EMO_RATE[voice.emotion] || EMO_RATE.idle;
-    var restMin = 1.6/rate, restMax = 3.6/rate;
+    var restMin = Math.max(GLOBAL_MIN_GAP, 2.2/rate);
+    var restMax = Math.max(restMin+2.0, 5.0/rate);
     voice.nextAt = t0 + Math.max(dur,0.2) + restMin + Math.random()*(restMax-restMin);
     return dur;
   }
 
-  /* social ping-pong: two nearby voices alternate within ~0.3-0.7s of each other */
-  function maybeChainReply(voice, t0){
-    if (voice.emotion !== 'social') return;
-    var partner = findNearestVoice(voice, 2.2);
-    if (!partner) return;
-    partner.emotion = 'social';
-    partner.nextAt = t0 + 0.25 + Math.random()*0.35;
-  }
+  /* social ping-pong: two nearby voices alternate within ~0.3-0.7s of each other.
+     Disabled — even brief deliberate overlap reads as "unison/overlapping voices",
+     which is exactly the artifact we're removing. Kept as a no-op so call sites
+     don't need to change. */
+  function maybeChainReply(voice, t0){ return; }
 
   /* ---------------- voice pool ----------------
      One lightweight "voice" record per audible agent. Pool is rebuilt
@@ -4778,9 +4801,11 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      -agent, keeping this decoupled from sim object lifecycles. */
   var pool = []; // {key, x, y, emotion, gender, gain, nextAt, agentRef}
   var poolIndex = {};
-  var MAX_CONCURRENT = 6;      // hard cap on simultaneously scheduled voices — kept sparse/atmospheric
+  var MAX_CONCURRENT = 1;      // hard cap on truly-simultaneous voices — strictly enforced via activeUntil
   var GATHER_INTERVAL = 0.6;   // seconds between full re-gather passes
   var gatherT = 0;
+  var voiceActiveUntil = 0;    // ctx.currentTime until which a sample is actually sounding — real concurrency gate
+  var GLOBAL_TRIGGER_CHANCE = 0.35; // even when a voice is "due", only fire this often — keeps it rare/atmospheric
 
   function genderForAgent(a, seed){
     // stable per-agent gender so the same townsperson sounds consistent
@@ -4789,10 +4814,15 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
 
   function emotionForAgent(a){
     if (a.flee > 0) return 'scared';
+    var rg = (typeof inRaidRadius==='function') ? inRaidRadius(a) : nearAnyEncounter(a, 5);
+    if (rg) {
+      // raid/combat proximity always wins — never let happy/laugh/social roll through here
+      if (a.nerve !== undefined) return a.respectful ? 'worried' : 'worried';
+      if (a.watch > 0) return 'worried';
+      return Math.random()<0.55 ? 'worried' : 'scared';
+    }
     if (a.nerve !== undefined) return a.respectful ? 'curious' : 'worried';
     if (a.watch > 0) return 'curious';
-    var rg = (typeof inRaidRadius==='function') ? inRaidRadius(a) : nearAnyEncounter(a, 5);
-    if (rg) return 'worried';
     if (a.act==='temple' || a.act==='water') return Math.random()<0.5 ? 'idle' : 'curious';
     if (a.pause>0 && Math.random()<0.4) return 'social';
     if (Math.random()<0.06) return 'happy';
@@ -4918,16 +4948,21 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     if (gatherT >= GATHER_INTERVAL || pool.length===0) { gatherT = 0; rebuildPool(); }
 
     var now = ctx.currentTime;
+    if (now < voiceActiveUntil) return; // a sample is already sounding — never overlap, full stop
     activeCount = 0;
     for (var i=0;i<pool.length && activeCount < MAX_CONCURRENT;i++){
       var v = pool[i];
       if (v.nextAt <= now + 0.02) {
+        if (Math.random() > GLOBAL_TRIGGER_CHANCE) {
+          // skip this cycle but don't let it go silent forever — push a short retry window
+          v.nextAt = now + 0.6 + Math.random()*0.8;
+          continue;
+        }
         var startAt = now + Math.random()*0.08;
         var len = schedulePhrase(v, startAt);
         maybeChainReply(v, startAt+len);
         activeCount++;
-      } else if (v.nextAt < now + 2.0) {
-        activeCount++; // counts as "soon active" for concurrency budgeting
+        break; // one voice per tick, period
       }
     }
   }
@@ -4941,12 +4976,14 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     radius = radius || 6.5;
     var now = ctx.currentTime;
     var burst = 0;
-    for (var i=0;i<pool.length && burst<4;i++){
+    for (var i=0;i<pool.length && burst<2;i++){
       var v = pool[i];
       var dx=v.x-tx, dy=v.y-ty;
       if (dx*dx+dy*dy < radius*radius) {
         v.emotion = (v.gender==='m' && Math.random()<0.5) ? 'aggressive' : 'scared';
-        v.nextAt = now + Math.random()*0.4;
+        // stagger so the raid bark still passes through the single-voice gate naturally
+        // instead of stacking everyone onto the same instant
+        v.nextAt = now + burst*GLOBAL_MIN_GAP*0.4 + Math.random()*0.4;
         burst++;
       }
     }
@@ -4963,6 +5000,260 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
 
   // Hook into the existing first-gesture unlock so AudioContext resumes
   // alongside BGM/SFX rather than needing a second user gesture.
+  function tryResume(){ if (ctx && ctx.state==='suspended') ctx.resume(); }
+  window.addEventListener('pointerdown', tryResume, {passive:true});
+
+})();
+</script>
+
+<script id="ykBattleSFX">
+/* ============================================================
+   SORU SHITI — Battle Sound System (Katana Clashes & Combat)
+   Synthesized Web Audio API. No external assets, no network fetch.
+   Weapon/impact sounds only — no vocal layer (handled by SoruGibberish).
+   ============================================================ */
+(function(){
+  "use strict";
+  if (window.__battleSFX) return; window.__battleSFX = true;
+
+  var ctx = null, master = null, bus = null;
+  function ensureCtx(){
+    if (ctx) { if (ctx.state==='suspended') ctx.resume(); return ctx; }
+    try {
+      ctx = (typeof sfxCtx === 'function') ? sfxCtx() : new (window.AudioContext||window.webkitAudioContext)();
+    } catch(e){ ctx = null; }
+    if (!ctx) return null;
+    bus = ctx.createGain(); bus.gain.value = 0.85;
+    var comp = null;
+    try {
+      comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -22; comp.knee.value = 14; comp.ratio.value = 3.5;
+      comp.attack.value = 0.003; comp.release.value = 0.12;
+    } catch(e){}
+    bus.connect(comp || master || ((typeof sfxDest==='function')?sfxDest(ctx):ctx.destination));
+    if (comp) comp.connect((typeof sfxDest==='function')?sfxDest(ctx):ctx.destination);
+    return ctx;
+  }
+
+  function rand(a,b){ return a+Math.random()*(b-a); }
+  function db2g(db){ return Math.pow(10, db/20); }
+
+  /* short noise buffer, reused & sliced — avoids reallocating per-hit */
+  var noiseBuf = null;
+  function getNoise(c){
+    if (noiseBuf && noiseBuf._ctx===c) return noiseBuf;
+    var len = c.sampleRate * 0.6;
+    var buf = c.createBuffer(1, len, c.sampleRate);
+    var d = buf.getChannelData(0);
+    for (var i=0;i<len;i++) d[i] = Math.random()*2-1;
+    buf._ctx = c; noiseBuf = buf;
+    return buf;
+  }
+
+  function noiseSrc(c, dest, t0, dur, filt){
+    var src = c.createBufferSource();
+    src.buffer = getNoise(c);
+    src.loopStart = 0; src.loopEnd = 0.6; src.loop = true;
+    var off = Math.random()*0.5;
+    var g = c.createGain();
+    var node = src;
+    if (filt){
+      var f = c.createBiquadFilter();
+      f.type = filt.type; f.frequency.value = filt.freq; f.Q.value = filt.q||1;
+      src.connect(f); f.connect(g); node = f;
+    } else { src.connect(g); }
+    g.connect(dest);
+    src.start(t0, off);
+    src.stop(t0+dur+0.02);
+    return g;
+  }
+
+  function ring(c, dest, t0, freq, dur, gain, decayCurve){
+    var o = c.createOscillator(), g = c.createGain();
+    o.type = 'triangle';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0+0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0+dur*(decayCurve||1));
+    o.connect(g); g.connect(dest);
+    o.start(t0); o.stop(t0+dur+0.05);
+    return g;
+  }
+
+  /* ---------------- Katana Clash (4-6 variations) ----------------
+     Metal-on-metal: bright noise burst shaped by a sharp bandpass,
+     layered with 2-3 inharmonic ring partials for "shimmer". */
+  var CLASH_VARIANTS = [
+    { freq: 2600, q: 7,  partials:[1, 2.41, 3.88], ringG: 0.30, noiseG: 0.55, dur: 0.16, tone:'sharp' },
+    { freq: 2100, q: 5,  partials:[1, 2.0, 3.2],   ringG: 0.34, noiseG: 0.50, dur: 0.20, tone:'resonant' },
+    { freq: 3100, q: 9,  partials:[1, 2.76],       ringG: 0.24, noiseG: 0.60, dur: 0.13, tone:'sharp' },
+    { freq: 1750, q: 4,  partials:[1, 1.78, 2.9],  ringG: 0.38, noiseG: 0.45, dur: 0.26, tone:'resonant' },
+    { freq: 2850, q: 8,  partials:[1, 2.55, 4.1],  ringG: 0.26, noiseG: 0.58, dur: 0.15, tone:'sharp' },
+    { freq: 2300, q: 6,  partials:[1, 2.2, 3.5],   ringG: 0.32, noiseG: 0.52, dur: 0.19, tone:'resonant' }
+  ];
+  function playClash(opts){
+    var c = ensureCtx(); if (!c) return;
+    opts = opts || {};
+    var v = CLASH_VARIANTS[(Math.random()*CLASH_VARIANTS.length)|0];
+    var t0 = c.currentTime + (opts.delay||0);
+    var gainScale = (opts.gain!=null?opts.gain:1);
+    var jitter = rand(0.92,1.08);
+    var freq = v.freq*jitter;
+
+    var ng = noiseSrc(c, bus, t0, v.dur, {type:'bandpass', freq:freq, q:v.q});
+    ng.gain.setValueAtTime(0.0001, t0);
+    ng.gain.exponentialRampToValueAtTime(v.noiseG*gainScale, t0+0.003);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t0+v.dur);
+
+    for (var i=0;i<v.partials.length;i++){
+      ring(c, bus, t0, freq*v.partials[i]*rand(0.99,1.01), v.dur*(1.4+i*0.5),
+           v.ringG*gainScale/(i*0.8+1), 1);
+    }
+    // tiny high-frequency "tick" transient for attack definition
+    ring(c, bus, t0, freq*1.6, 0.025, 0.18*gainScale, 1);
+  }
+
+  /* ---------------- Katana Swing (3-4 variations) ----------------
+     Whoosh: filtered noise with a fast frequency sweep (bandpass
+     center moves), no metallic ring — just air being cut. */
+  var SWING_VARIANTS = [
+    { startF: 1800, endF: 600,  dur: 0.16, q: 1.4, gain: 0.30, label:'fast-light'  },
+    { startF: 1200, endF: 350,  dur: 0.24, q: 1.1, gain: 0.34, label:'heavy'       },
+    { startF: 2200, endF: 800,  dur: 0.12, q: 1.6, gain: 0.26, label:'fast-light'  },
+    { startF: 1500, endF: 450,  dur: 0.20, q: 1.2, gain: 0.32, label:'medium'      }
+  ];
+  function playSwing(opts){
+    var c = ensureCtx(); if (!c) return;
+    opts = opts || {};
+    var v = SWING_VARIANTS[(Math.random()*SWING_VARIANTS.length)|0];
+    var t0 = c.currentTime + (opts.delay||0);
+    var gainScale = (opts.gain!=null?opts.gain:1);
+    var speedJ = rand(0.85,1.15);
+    var dur = v.dur*speedJ;
+
+    var src = c.createBufferSource();
+    src.buffer = getNoise(c);
+    src.loop = true; src.loopStart=0; src.loopEnd=0.6;
+    var off = Math.random()*0.5;
+    var filt = c.createBiquadFilter();
+    filt.type='bandpass'; filt.Q.value=v.q;
+    filt.frequency.setValueAtTime(v.startF*rand(0.9,1.1), t0);
+    filt.frequency.exponentialRampToValueAtTime(Math.max(80,v.endF*rand(0.9,1.1)), t0+dur);
+    var g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(v.gain*gainScale, t0+dur*0.18);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+    src.connect(filt); filt.connect(g); g.connect(bus);
+    src.start(t0, off); src.stop(t0+dur+0.02);
+  }
+
+  /* ---------------- Blade Impact (3-4 variations) ----------------
+     Blade hitting something solid (armor/body) — duller thud than
+     a clash: low-passed noise thump + a short low ring partial. */
+  var IMPACT_VARIANTS = [
+    { thumpF: 220, thumpQ: 1.2, ringF: 140, dur: 0.18, gain: 0.42, label:'soft'   },
+    { thumpF: 340, thumpQ: 1.6, ringF: 210, dur: 0.14, gain: 0.46, label:'sharp'  },
+    { thumpF: 180, thumpQ: 1.0, ringF: 110, dur: 0.22, gain: 0.40, label:'heavy'  },
+    { thumpF: 280, thumpQ: 1.4, ringF: 170, dur: 0.16, gain: 0.44, label:'medium' }
+  ];
+  function playImpact(opts){
+    var c = ensureCtx(); if (!c) return;
+    opts = opts || {};
+    var v = IMPACT_VARIANTS[(Math.random()*IMPACT_VARIANTS.length)|0];
+    var t0 = c.currentTime + (opts.delay||0);
+    var gainScale = (opts.gain!=null?opts.gain:1);
+    var jitter = rand(0.93,1.07);
+
+    var ng = noiseSrc(c, bus, t0, v.dur, {type:'lowpass', freq:v.thumpF*jitter, q:v.thumpQ});
+    ng.gain.setValueAtTime(0.0001, t0);
+    ng.gain.exponentialRampToValueAtTime(v.gain*gainScale, t0+0.006);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t0+v.dur);
+
+    // low body-thud ring, gives weight without sounding metallic
+    var o = c.createOscillator(), og = c.createGain();
+    o.type='sine'; o.frequency.value = v.ringF*jitter;
+    og.gain.setValueAtTime(0.0001, t0);
+    og.gain.exponentialRampToValueAtTime(0.30*gainScale, t0+0.004);
+    og.gain.exponentialRampToValueAtTime(0.0001, t0+v.dur*1.6);
+    o.connect(og); og.connect(bus);
+    o.start(t0); o.stop(t0+v.dur*1.6+0.05);
+
+    // faint grit transient (cloth/leather/armor texture)
+    var gg = noiseSrc(c, bus, t0, 0.03, {type:'highpass', freq:2400, q:0.7});
+    gg.gain.setValueAtTime(0.0001,t0);
+    gg.gain.exponentialRampToValueAtTime(0.12*gainScale, t0+0.002);
+    gg.gain.exponentialRampToValueAtTime(0.0001, t0+0.03);
+  }
+
+  /* ---------------- Parry / Deflect (2-3 variations) ----------------
+     Glancing metal contact — shorter, higher, thinner than a full
+     clash; reads as a deflection rather than a clean strike. */
+  var PARRY_VARIANTS = [
+    { freq: 3400, q: 10, dur: 0.10, ringG: 0.22, noiseG: 0.40 },
+    { freq: 2900, q: 8,  dur: 0.13, ringG: 0.26, noiseG: 0.36 },
+    { freq: 3800, q: 12, dur: 0.08, ringG: 0.18, noiseG: 0.44 }
+  ];
+  function playParry(opts){
+    var c = ensureCtx(); if (!c) return;
+    opts = opts || {};
+    var v = PARRY_VARIANTS[(Math.random()*PARRY_VARIANTS.length)|0];
+    var t0 = c.currentTime + (opts.delay||0);
+    var gainScale = (opts.gain!=null?opts.gain:1);
+    var freq = v.freq*rand(0.95,1.05);
+
+    var ng = noiseSrc(c, bus, t0, v.dur, {type:'bandpass', freq:freq, q:v.q});
+    ng.gain.setValueAtTime(0.0001, t0);
+    ng.gain.exponentialRampToValueAtTime(v.noiseG*gainScale, t0+0.002);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t0+v.dur);
+
+    ring(c, bus, t0, freq*1.5, v.dur*1.2, v.ringG*gainScale, 1);
+    ring(c, bus, t0, freq*2.9, v.dur*0.7, v.ringG*0.5*gainScale, 1);
+  }
+
+  /* ---------------- polyphony / scheduling guard ----------------
+     Caps simultaneous voices so a big multi-duel raid doesn't spike
+     CPU or clip the bus; oldest-active accounting via a simple counter
+     with timed release rather than tracking node references. */
+  var MAX_VOICES = 24;
+  var activeVoices = 0;
+  function withVoiceBudget(durEstimate, fn){
+    if (activeVoices >= MAX_VOICES) return false;
+    activeVoices++;
+    fn();
+    setTimeout(function(){ activeVoices = Math.max(0, activeVoices-1); }, Math.max(50, durEstimate*1000));
+    return true;
+  }
+
+  /* ---------------- public trigger API ----------------
+     gain: optional 0-1 scale (e.g. distance/zoom attenuation).
+     delay: optional seconds to offset playback (for staggering a burst). */
+  function clash(opts){ withVoiceBudget(0.3, function(){ playClash(opts); }); }
+  function swing(opts){ withVoiceBudget(0.3, function(){ playSwing(opts); }); }
+  function impact(opts){ withVoiceBudget(0.3, function(){ playImpact(opts); }); }
+  function parry(opts){ withVoiceBudget(0.2, function(){ playParry(opts); }); }
+
+  /* Convenience: fire 2-3 clashes in a quick ragged cluster, useful for
+     group-duel ambience without each call site hand-rolling timing. */
+  function clashCluster(n, opts){
+    n = n || (2+((Math.random()*2)|0));
+    for (var i=0;i<n;i++){
+      var o = Object.assign({}, opts||{});
+      o.delay = (opts&&opts.delay||0) + i*rand(0.03,0.09);
+      o.gain = (opts&&opts.gain!=null?opts.gain:1) * rand(0.7,1);
+      clash(o);
+    }
+  }
+
+  window.SoruBattleSFX = {
+    clash: clash,
+    swing: swing,
+    impact: impact,
+    parry: parry,
+    clashCluster: clashCluster,
+    setBusGain: function(v){ if (bus) bus.gain.value = Math.max(0,Math.min(1,v)); },
+    _debug: { ensureCtx: ensureCtx }
+  };
+
   function tryResume(){ if (ctx && ctx.state==='suspended') ctx.resume(); }
   window.addEventListener('pointerdown', tryResume, {passive:true});
 
