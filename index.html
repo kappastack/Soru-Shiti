@@ -4511,18 +4511,54 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
 
 <script id="ykGibberish">
 /* ============================================================
-   SORU SHITI — Townsperson Gibberish Voice Layer
-   Web Audio API, zoom-gated, procedural, emotion-driven.
-   Reads cam.zoom / S.era / residents / traffic / encounters.
-   Writes nothing back to sim state — pure presentation layer.
+   SORU SHITI — Townsperson Gibberish Voice Layer (Simlish-style)
+   Web Audio API, sample-based. Plays short, sparse, randomized
+   vocal-texture clips from real .ogg files placed beside index.html.
+   Zoom-gated (audible only when zoomed in, fades out by mid-zoom,
+   silent when fully zoomed out). Reads cam.zoom / S.era / residents /
+   traffic / encounters. Writes nothing back to sim state — pure
+   presentation layer.
    ============================================================ */
 (function(){
   "use strict";
   if (window.__gib) return; window.__gib = true;
 
-  /* ---------------- zoom gate ---------------- */
-  // ZMIN/ZMAX exist on the camera already; we read cam.zoom each frame and
-  // derive a 0..1 audibility curve. Below GIB_Z_LOW: silent. Above GIB_Z_HIGH: full volume.
+  /* ---------------- sample manifest ----------------
+     Files expected in the same folder as index.html. */
+  var FEMALE_FILES = ['f-chat1.ogg','f-happy1.ogg','f-laugh1.ogg','f-laugh2.ogg','f-sad.ogg'];
+  var MALE_FILES   = ['m-angry.ogg','m-chat1.ogg','m-chat2.ogg','m-chat3.ogg','m-chat4.ogg',
+                       'm-happy.ogg','m-sad.ogg','m-weird1.ogg','m-weird2.ogg'];
+
+  /* emotion -> which files are appropriate, per gender bank.
+     calm/chatty default pool is the *-chatN / *-happy / *-sad files;
+     raids pull from the more aggressive/scared-sounding set. */
+  var FEMALE_BANK = {
+    idle:    ['f-chat1.ogg'],
+    social:  ['f-chat1.ogg','f-happy1.ogg'],
+    happy:   ['f-happy1.ogg','f-laugh1.ogg','f-laugh2.ogg'],
+    laugh:   ['f-laugh1.ogg','f-laugh2.ogg'],
+    worried: ['f-chat1.ogg','f-sad.ogg'],
+    sad:     ['f-sad.ogg'],
+    scared:  ['f-sad.ogg'],
+    curious: ['f-chat1.ogg']
+  };
+  var MALE_BANK = {
+    idle:      ['m-chat1.ogg','m-chat2.ogg','m-chat3.ogg','m-chat4.ogg'],
+    social:    ['m-chat1.ogg','m-chat2.ogg','m-chat3.ogg','m-chat4.ogg','m-happy.ogg'],
+    happy:     ['m-happy.ogg'],
+    laugh:     ['m-happy.ogg'],
+    worried:   ['m-chat1.ogg','m-weird1.ogg','m-weird2.ogg'],
+    aggressive:['m-angry.ogg'],
+    scared:    ['m-weird1.ogg','m-weird2.ogg'],
+    curious:   ['m-chat1.ogg','m-weird1.ogg']
+  };
+
+  function pick(arr){ return arr[(Math.random()*arr.length)|0]; }
+
+  /* ---------------- zoom gate ----------------
+     Below GIB_Z_LOW: silent. Above GIB_Z_HIGH: full volume.
+     Fades through the middle so it dies out by mid-map zoom and is
+     fully gone at max zoom-out, per spec. */
   var GIB_Z_LOW  = 0.45;
   var GIB_Z_HIGH = 1.6;
   function zoomAudibility(){
@@ -4542,11 +4578,11 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     } catch(e){ ctx = null; }
     if (!ctx) return null;
     master = ctx.createGain(); master.gain.value = 0;
-    voicesBus = ctx.createGain(); voicesBus.gain.value = 0.85;
+    voicesBus = ctx.createGain(); voicesBus.gain.value = 0.9;
     var comp = null;
     try {
       comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -28; comp.knee.value = 18; comp.ratio.value = 3.2;
+      comp.threshold.value = -26; comp.knee.value = 16; comp.ratio.value = 3.0;
       comp.attack.value = 0.006; comp.release.value = 0.18;
     } catch(e){}
     voicesBus.connect(comp || master);
@@ -4555,158 +4591,91 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     return ctx;
   }
 
-  /* ---------------- phoneme bank ----------------
-     Japanese-flavored CV (consonant-vowel) mora set, loosely grouped by
-     character so formant shaping stays plausible per emotion. */
-  var VOWELS = ['a','i','u','e','o'];
-  var VFORM = { // approx formant centers [F1,F2] in Hz, used to drive filter sweeps
-    a:[730,1090], i:[270,2290], u:[300,870], e:[530,1840], o:[570,840]
-  };
-  var CONS_SOFT = ['','m','n','y','w','h'];
-  var CONS_HARD = ['k','t','s','d','g','z','b','p'];
+  /* ---------------- sample loading ----------------
+     Decoded buffers are cached by filename. Loading is lazy and
+     fire-once per file; failures are remembered so we don't retry
+     every frame (e.g. a missing/renamed asset). */
+  var bufferCache = {};   // filename -> AudioBuffer
+  var loadFailed = {};    // filename -> true
+  var loadingNow = {};    // filename -> true (in-flight)
 
-  function pick(arr){ return arr[(Math.random()*arr.length)|0]; }
-  function jrand(spread){ return (Math.random()*2-1)*spread; }
+  function loadSample(filename){
+    if (bufferCache[filename] || loadFailed[filename] || loadingNow[filename]) return;
+    var c = ensureCtx();
+    if (!c) return;
+    loadingNow[filename] = true;
+    fetch(filename).then(function(res){
+      if (!res.ok) throw new Error('fetch '+res.status);
+      return res.arrayBuffer();
+    }).then(function(ab){
+      return c.decodeAudioData(ab);
+    }).then(function(buf){
+      bufferCache[filename] = buf;
+      loadingNow[filename] = false;
+    }).catch(function(e){
+      loadFailed[filename] = true;
+      loadingNow[filename] = false;
+      if (window.__err) window.__err('gibberish sample load failed: '+filename+' ('+(e.message||e)+')');
+    });
+  }
 
-  /* ---------------- emotion presets ----------------
-     Each preset shapes pitch, mora rate/length, formant brightness,
-     vibrato, breathiness and burst behavior (laugh/stutter). */
-  var EMO = {
-    idle:      { pitch:1.00, jit:0.05, rate:3.6, dur:0.16, gap:0.10, bright:0.35, vibrato:0.015, breath:0.22, burst:0 },
-    social:    { pitch:1.05, jit:0.07, rate:4.4, dur:0.14, gap:0.07, bright:0.45, vibrato:0.02,  breath:0.18, burst:0.05 },
-    happy:     { pitch:1.18, jit:0.06, rate:4.8, dur:0.13, gap:0.06, bright:0.6,  vibrato:0.03,  breath:0.12, burst:0.10 },
-    laugh:     { pitch:1.22, jit:0.04, rate:6.5, dur:0.085,gap:0.03, bright:0.55, vibrato:0.06,  breath:0.05, burst:0.85 },
-    worried:   { pitch:1.12, jit:0.14, rate:5.0, dur:0.10, gap:0.05, bright:0.4,  vibrato:0.08,  breath:0.3,  burst:0.05 },
-    aggressive:{ pitch:0.82, jit:0.10, rate:4.2, dur:0.13, gap:0.04, bright:0.25, vibrato:0.02,  breath:0.08, burst:0.12 },
-    scared:    { pitch:1.35, jit:0.20, rate:7.2, dur:0.07, gap:0.02, bright:0.5,  vibrato:0.12,  breath:0.4,  burst:0.15 },
-    curious:   { pitch:1.02, jit:0.06, rate:3.2, dur:0.18, gap:0.12, bright:0.4,  vibrato:0.02,  breath:0.2,  burst:0.02 }
-  };
+  function preloadAll(){
+    for (var i=0;i<FEMALE_FILES.length;i++) loadSample(FEMALE_FILES[i]);
+    for (var j=0;j<MALE_FILES.length;j++) loadSample(MALE_FILES[j]);
+  }
 
-  /* ---------------- one synthesized mora burst ----------------
-     Two-formant resonant model: a buzzy glottal source (sawtooth/triangle)
-     shaped by two bandpass peaks approximating vowel formants, plus a
-     short noise burst at onset for consonant attack. */
-  function synthMora(t0, basePitch, emo, vowel, cons, gainScale){
-    if (!ctx) return 0;
-    var fm = VFORM[vowel];
-    var dur = Math.max(0.035, emo.dur * (0.85 + Math.random()*0.3));
-    var src = ctx.createOscillator();
-    src.type = (Math.random()<0.5) ? 'sawtooth' : 'triangle';
-    var f0 = basePitch * (1 + jrand(emo.jit));
-    src.frequency.setValueAtTime(f0, t0);
+  /* ---------------- one sample playback ----------------
+     Randomizes pitch (playbackRate doubles as a pitch shift, which is
+     the simplest way to keep repeated clips from sounding identical),
+     volume, and a tiny start offset so back-to-back plays of the same
+     file don't phase-lock against each other. */
+  function playSample(filename, t0, gainScale){
+    var buf = bufferCache[filename];
+    if (!buf || !ctx) return 0;
+    var src = ctx.createBufferSource();
+    src.buffer = buf;
+    var rate = 0.9 + Math.random()*0.25;       // playback speed/pitch jitter
+    src.playbackRate.value = rate;
 
-    // gentle vibrato + pitch wobble per mora for organic imperfection
-    if (emo.vibrato > 0) {
-      var lfo = ctx.createOscillator(); lfo.type='sine'; lfo.frequency.value = 5 + Math.random()*3;
-      var lfoGain = ctx.createGain(); lfoGain.gain.value = f0 * emo.vibrato;
-      lfo.connect(lfoGain); lfoGain.connect(src.frequency);
-      lfo.start(t0); lfo.stop(t0+dur+0.02);
-    }
-    // slight pitch drop across the mora (natural mora decay)
-    src.frequency.exponentialRampToValueAtTime(Math.max(60, f0*0.92), t0+dur);
-
-    var f1 = ctx.createBiquadFilter(); f1.type='bandpass'; f1.frequency.value = fm[0]; f1.Q.value = 6;
-    var f2 = ctx.createBiquadFilter(); f2.type='bandpass'; f2.frequency.value = fm[1]; f2.Q.value = 5 + emo.bright*6;
-    var f2gain = ctx.createGain(); f2gain.gain.value = 0.35 + emo.bright*0.5;
-
-    var amp = ctx.createGain(); amp.gain.value = 0.0001;
-    var attack = Math.min(0.02, dur*0.18), release = dur*0.45;
-    var peak = 0.5*gainScale;
+    var amp = ctx.createGain();
+    var peak = (0.55 + Math.random()*0.35) * gainScale;
+    var dur = buf.duration / rate;
+    var attack = Math.min(0.04, dur*0.15), release = Math.min(0.25, dur*0.35);
     amp.gain.setValueAtTime(0.0001, t0);
     amp.gain.exponentialRampToValueAtTime(peak, t0+attack);
+    amp.gain.setValueAtTime(peak, Math.max(t0+attack, t0+dur-release));
     amp.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
 
-    src.connect(f1); f1.connect(amp);
-    src.connect(f2); f2.connect(f2gain); f2gain.connect(amp);
-    amp.connect(voicesBus);
-
-    src.start(t0); src.stop(t0+dur+0.02);
-
-    // consonant attack: brief filtered noise burst before the vowel for hard
-    // onsets (k/t/s/d/g/z/b/p); soft onsets (m/n/y/w/h/'') skip the burst.
-    if (cons && CONS_HARD.indexOf(cons) >= 0) {
-      var nbuf = noiseBurst(0.025);
-      var nsrc = ctx.createBufferSource(); nsrc.buffer = nbuf;
-      var nf = ctx.createBiquadFilter();
-      nf.type = (cons==='s'||cons==='z') ? 'highpass' : 'bandpass';
-      nf.frequency.value = (cons==='s'||cons==='z') ? 4000 : 1800;
-      nf.Q.value = 1.2;
-      var ng = ctx.createGain(); ng.gain.value = 0.0001;
-      ng.gain.setValueAtTime(0.0001, t0);
-      ng.gain.exponentialRampToValueAtTime(0.22*gainScale, t0+0.004);
-      ng.gain.exponentialRampToValueAtTime(0.0001, t0+0.03);
-      nsrc.connect(nf); nf.connect(ng); ng.connect(voicesBus);
-      nsrc.start(t0); nsrc.stop(t0+0.04);
-    }
-    // breathiness: low-level noise wash under the vowel
-    if (emo.breath > 0) {
-      var bbuf = noiseBurst(dur+0.02);
-      var bsrc = ctx.createBufferSource(); bsrc.buffer = bbuf;
-      var bf = ctx.createBiquadFilter(); bf.type='bandpass'; bf.frequency.value = fm[0]*1.4; bf.Q.value=0.7;
-      var bg = ctx.createGain(); bg.gain.value=0.0001;
-      bg.gain.setValueAtTime(0.0001,t0);
-      bg.gain.exponentialRampToValueAtTime(0.08*emo.breath*gainScale, t0+attack);
-      bg.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
-      bsrc.connect(bf); bf.connect(bg); bg.connect(voicesBus);
-      bsrc.start(t0); bsrc.stop(t0+dur+0.03);
-    }
+    src.connect(amp); amp.connect(voicesBus);
+    src.start(t0);
+    src.stop(t0+dur+0.05);
     return dur;
   }
 
-  /* cached short noise buffers, reused across calls to avoid GC churn */
-  var noiseCache = {};
-  function noiseBurst(secs){
-    var key = Math.round(secs*1000);
-    if (noiseCache[key]) return noiseCache[key];
-    var ctxr = ctx, n = Math.max(1, Math.floor(ctxr.sampleRate*secs));
-    var buf = ctxr.createBuffer(1, n, ctxr.sampleRate);
-    var d = buf.getChannelData(0);
-    for (var i=0;i<n;i++) d[i] = (Math.random()*2-1) * (1 - i/n);
-    if (Object.keys(noiseCache).length < 12) noiseCache[key] = buf;
-    return buf;
-  }
-
-  /* laughing / stutter burst: rapid string of short open-vowel pulses */
-  function synthLaugh(t0, basePitch, emo, gainScale){
-    var n = 2 + ((Math.random()*3)|0);
-    var t = t0, total = 0;
-    for (var i=0;i<n;i++){
-      var v = pick(['a','e','o']);
-      var d = synthMora(t, basePitch*(1+0.05*i), Object.assign({},emo,{dur:0.07,jit:0.03,vibrato:0.05}), v, '', gainScale*(1-i*0.08));
-      t += d*0.7 + 0.045 + Math.random()*0.02;
-      total += d;
-    }
-    return t - t0;
-  }
-
   /* ---------------- per-voice phrase scheduler ----------------
-     A "phrase" is a short run of 2-5 morae forming one utterance,
-     followed by a pause. Stutter/imperfection: occasional truncated
-     mora, occasional repeated mora, occasional mid-phrase micro-pause. */
+     A "phrase" here is exactly one sample clip (the source files are
+     already short, self-contained utterances), followed by a pause
+     whose length depends on the emotion's chattiness. */
+  var EMO_RATE = { // phrases per ~second equivalent, used to derive rest length
+    idle:0.28, social:0.34, happy:0.4, laugh:0.5, worried:0.32,
+    sad:0.22, aggressive:0.5, scared:0.55, curious:0.3
+  };
+
+  function bankForVoice(voice){ return voice.gender==='f' ? FEMALE_BANK : MALE_BANK; }
+
   function schedulePhrase(voice, t0){
-    var emo = EMO[voice.emotion] || EMO.idle;
-    var n = 2 + ((Math.random()*3)|0);
-    var t = t0;
-    if (emo.burst > 0 && Math.random() < emo.burst) {
-      t += synthLaugh(t, voice.pitch, emo, voice.gain);
-    } else {
-      var lastVowel = null;
-      for (var i=0;i<n;i++){
-        var cons = (Math.random()<0.75) ? pick(CONS_HARD.concat(CONS_SOFT)) : '';
-        var vowel = pick(VOWELS);
-        // mild repetition imperfection: sometimes echo the previous vowel (stammer-ish)
-        if (lastVowel && Math.random()<0.08) vowel = lastVowel;
-        lastVowel = vowel;
-        var dur = synthMora(t, voice.pitch, emo, vowel, cons, voice.gain);
-        t += dur + emo.gap*(0.6+Math.random()*0.8);
-        // rare micro-pause mid-phrase (hesitation)
-        if (Math.random() < 0.06) t += 0.06 + Math.random()*0.08;
-      }
+    var bank = bankForVoice(voice);
+    var pool = bank[voice.emotion] || bank.idle;
+    var filename = pick(pool);
+    loadSample(filename); // ensure it's loading/loaded for next time even if this attempt misses
+    var dur = 0;
+    if (bufferCache[filename]) {
+      dur = playSample(filename, t0, voice.gain);
     }
-    var phraseLen = t - t0;
-    var restMin = 1.4/emo.rate, restMax = 3.2/emo.rate;
-    voice.nextAt = t + restMin + Math.random()*(restMax-restMin);
-    return phraseLen;
+    var rate = EMO_RATE[voice.emotion] || EMO_RATE.idle;
+    var restMin = 1.6/rate, restMax = 3.6/rate;
+    voice.nextAt = t0 + Math.max(dur,0.2) + restMin + Math.random()*(restMax-restMin);
+    return dur;
   }
 
   /* social ping-pong: two nearby voices alternate within ~0.3-0.7s of each other */
@@ -4716,23 +4685,21 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     if (!partner) return;
     partner.emotion = 'social';
     partner.nextAt = t0 + 0.25 + Math.random()*0.35;
-    partner.replyChain = (partner.replyChain||0) + 1;
   }
 
   /* ---------------- voice pool ----------------
-     One lightweight "voice" record per audible agent. Pool is rebuilt from
-     residents/traffic each gather pass rather than persisted per-agent,
-     keeping this decoupled from sim object lifecycles. */
-  var pool = []; // {id, x, y, emotion, pitch, gain, nextAt, agentRef}
+     One lightweight "voice" record per audible agent. Pool is rebuilt
+     from residents/traffic each gather pass rather than persisted per
+     -agent, keeping this decoupled from sim object lifecycles. */
+  var pool = []; // {key, x, y, emotion, gender, gain, nextAt, agentRef}
   var poolIndex = {};
-  var MAX_CONCURRENT = 10;     // hard cap on simultaneously scheduled voices
+  var MAX_CONCURRENT = 6;      // hard cap on simultaneously scheduled voices — kept sparse/atmospheric
   var GATHER_INTERVAL = 0.6;   // seconds between full re-gather passes
   var gatherT = 0;
 
-  function pitchForAgent(a, seed){
-    // stable per-agent pitch variance so the same townsperson sounds consistent
-    var h = seed % 1000 / 1000;
-    return 150 + h*70; // 150-220 Hz base mora pitch, modest "voice" range
+  function genderForAgent(a, seed){
+    // stable per-agent gender so the same townsperson sounds consistent
+    return ((seed*977+13) % 2 === 0) ? 'f' : 'm';
   }
 
   function emotionForAgent(a){
@@ -4743,7 +4710,8 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     if (rg) return 'worried';
     if (a.act==='temple' || a.act==='water') return Math.random()<0.5 ? 'idle' : 'curious';
     if (a.pause>0 && Math.random()<0.4) return 'social';
-    if (Math.random()<0.08) return 'happy';
+    if (Math.random()<0.06) return 'happy';
+    if (Math.random()<0.04) return 'sad';
     return 'idle';
   }
 
@@ -4777,13 +4745,6 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     return best;
   }
 
-  function worldToScreenDist(){
-    // camera-space distance scale: at high zoom agents are "close" so audibility
-    // is primarily zoom-gated globally, not per-agent panned (kept deliberately
-    // simple/atmospheric per spec — no per-voice stereo pan/falloff).
-    return 1;
-  }
-
   function gatherVoices(){
     var list = [];
     if (typeof residents !== 'undefined') {
@@ -4813,8 +4774,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
 
   function rebuildPool(){
     var raw = gatherVoices();
-    var n = Math.min(raw.length, MAX_CONCURRENT*3); // keep a slightly larger pool than concurrent cap; scheduling self-throttles
-    // shuffle-sample so we don't always hear the same first-N agents
+    var n = Math.min(raw.length, MAX_CONCURRENT*3); // keep a slightly larger pool than concurrent cap
     for (var i=raw.length-1;i>0;i--){ var j=(Math.random()*(i+1))|0; var tmp=raw[i]; raw[i]=raw[j]; raw[j]=tmp; }
     raw = raw.slice(0, n);
 
@@ -4825,7 +4785,8 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
       seen[key] = true;
       var v = poolIndex[key];
       if (!v) {
-        v = { key:key, x:a.x, y:a.y, pitch:pitchForAgent(a, (k*977+13)%1000), gain:0.55+Math.random()*0.3, nextAt:0, replyChain:0 };
+        v = { key:key, x:a.x, y:a.y, gender:genderForAgent(a, (k*977+13)%1000),
+              gain:0.55+Math.random()*0.3, nextAt:0 };
         poolIndex[key] = v;
         pool.push(v);
       }
@@ -4842,7 +4803,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
   var curVol = 0;
   function updateMasterGain(dt){
     if (!ctx || !master) return;
-    var target = zoomAudibility() * 0.34; // overall ceiling — kept subtle/atmospheric
+    var target = zoomAudibility() * 0.5; // overall ceiling — kept subtle/atmospheric
     var rate = 2.0; // smoothing speed
     curVol += (target-curVol) * Math.min(1, dt*rate);
     if (Math.abs(curVol - master.gain.value) > 0.001) {
@@ -4855,10 +4816,9 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
   /* ---------------- main tick ----------------
      Call updateGibberish(dt) once per frame from the existing sim loop.
      Internally throttles: agent gathering is periodic, scheduling is
-     per-voice and respects nextAt timestamps. Entirely inert at zero volume
-     (still schedules silently rather than skip, so re-entering zoom range
-     doesn't produce a jarring sudden cluster — acceptable tiny cost). */
+     per-voice and respects nextAt timestamps. */
   var activeCount = 0;
+  var preloaded = false;
   function updateGibberish(dt){
     var audibility = zoomAudibility();
     if (audibility <= 0.001) {
@@ -4866,6 +4826,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
       return; // fully silent at this zoom — skip scheduling entirely, cheapest path
     }
     if (!ensureCtx()) return;
+    if (!preloaded) { preloaded = true; preloadAll(); }
     updateMasterGain(dt);
 
     gatherT += dt;
@@ -4876,24 +4837,20 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     for (var i=0;i<pool.length && activeCount < MAX_CONCURRENT;i++){
       var v = pool[i];
       if (v.nextAt <= now + 0.02) {
-        // stagger scheduling slightly so MAX_CONCURRENT isn't all triggered the same tick
-        var startAt = now + Math.random()*0.05;
+        var startAt = now + Math.random()*0.08;
         var len = schedulePhrase(v, startAt);
         maybeChainReply(v, startAt+len);
         activeCount++;
-      } else if (v.nextAt < now + 1.5) {
+      } else if (v.nextAt < now + 2.0) {
         activeCount++; // counts as "soon active" for concurrency budgeting
       }
     }
   }
 
   /* ---------------- event hooks ----------------
-     Raid/disaster triggers an immediate localized panic burst rather than
-     waiting for the next natural gather/schedule cycle. Call directly from
-     existing raid trigger sites (e.g. inside the same function that calls
-     scatterWitnesses), or rely on emotionForAgent picking it up next tick —
-     both paths are safe; this just removes latency for the player who is
-     already zoomed in when a raid lands. */
+     Raid/disaster triggers an immediate localized panic/aggression
+     burst rather than waiting for the next natural gather/schedule
+     cycle. Call directly from existing raid trigger sites. */
   function onRaidEvent(tx, ty, radius){
     if (zoomAudibility() <= 0.001 || !ctx) return;
     radius = radius || 6.5;
@@ -4903,7 +4860,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
       var v = pool[i];
       var dx=v.x-tx, dy=v.y-ty;
       if (dx*dx+dy*dy < radius*radius) {
-        v.emotion = 'scared';
+        v.emotion = (v.gender==='m' && Math.random()<0.5) ? 'aggressive' : 'scared';
         v.nextAt = now + Math.random()*0.4;
         burst++;
       }
@@ -4915,7 +4872,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     update: updateGibberish,   // call once per frame, e.g. inside loop(): updateGibberish(dt)
     onRaidEvent: onRaidEvent,  // optional direct hook from raid-trigger code
     setEnabled: function(on){ enabledOverride = !!on; },
-    _debug: { pool: pool, zoomAudibility: zoomAudibility }
+    _debug: { pool: pool, zoomAudibility: zoomAudibility, bufferCache: bufferCache }
   };
   var enabledOverride = true;
 
