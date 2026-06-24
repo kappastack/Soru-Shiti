@@ -3855,7 +3855,7 @@ function refreshHUD(){
 }
 let advTimer=0;
 function advise(s){document.getElementById('advisor').innerHTML='<b>DR. SOL</b> — '+s;advTimer=9;}
-function toast(t,s){const d=document.createElement('div');d.className='tmsg';d.innerHTML='<b>'+t+'</b>'+(s?' · '+s:'');document.getElementById('toast').appendChild(d);setTimeout(()=>d.remove(),2200);}
+function toast(t,s){if(window.playNotification)playNotification();const d=document.createElement('div');d.className='tmsg';d.innerHTML='<b>'+t+'</b>'+(s?' · '+s:'');document.getElementById('toast').appendChild(d);setTimeout(()=>d.remove(),2200);}
 function worstDistrict(){ if(!healthGrid)return null; const GS=10,cols=Math.ceil(W/GS),bk={};
   for(let y=0;y<H;y++)for(let x=0;x<W;x++){const c=grid[y][x];if(!c.zone||c.dev<1)continue;const noH=!healthGrid[y][x],noE=!eduGrid[y][x];if(!noH&&!noE)continue;
     const k=((y/GS)|0)*cols+((x/GS)|0);const b=bk[k]||(bk[k]={n:0,nH:0,nE:0,sx:0,sy:0});b.n++;if(noH)b.nH++;if(noE)b.nE++;b.sx+=x;b.sy+=y;}
@@ -3897,14 +3897,15 @@ function markSel(){ document.querySelectorAll('.bbtn').forEach(d=>d.classList.to
 /* ============================ INPUT / ACTIONS ============================ */
 let lastPoorMsg=0;
 function spend(g){ if(S.wallet.soru<g){ if(performance.now()-lastPoorMsg>1200){ lastPoorMsg=performance.now();
-    toast('Need $'+g+' SORU','have $'+fmt(Math.round(S.wallet.soru))); advise('Out of $SORU — it is burned on every act. Earn SOL from the buildings you keep standing, then swap SOL→$SORU at the DEX.'); } return false; }
+    if(window.playError)playError(); toast('Need $'+g+' SORU','have $'+fmt(Math.round(S.wallet.soru))); advise('Out of $SORU — it is burned on every act. Earn SOL from the buildings you keep standing, then swap SOL→$SORU at the DEX.'); } return false; }
   S.wallet.soru-=g; S.burned+=g; S.recentBurn+=g; S.kami+=g; return true; }   // 100% burned → Kami (1:1, exactly $SORU spent)
 function place(tx,ty){ if(!inB(tx,ty))return; const c=grid[ty][tx]; gridVersion++;
   if(S.demo){ if(c.civ===TOWN)return;                          // RAZE: tear down your OWN works only — rivals must be PILLAGED
-    if(c.own&&c.own!==CLIENT){ toast('Not yours','use PILLAGE on rivals'); return; }
+    if(c.own&&c.own!==CLIENT){ if(window.playError)playError(); toast('Not yours','use PILLAGE on rivals'); return; }
     if(!(c.zone||c.civ||c.dev||c.road||c.wire||c.ruin)){ return; } // nothing to raze here
     if(!spend(500))return;                                       // 500 $SORU burned — cleanup tool
     c.zone=0;c.civ=0;c.dev=0;c.own=0;c.wire=0;c.blight=0;c.ruin=0;c.burn=0;c.guard=0; if(c.road)c.road=0;
+    if(window.playRaze)playRaze();
     syncTraffic(); rebuildCoverage(); refreshHUD(); return; }
   if(S.douse){ if(c.burn){c.burn=0; for(const[dx,dy]of NEIGH){const n=grid[ty+dy]&&grid[ty+dy][tx+dx];if(n&&n.burn)n.burn=Math.max(0,n.burn-2);} toast('💧 Doused');} return; }
   if(S.guard){ const mine=(c.dev>0&&c.own===CLIENT)||(c.civ&&c.civ!==TOWN);
@@ -3927,13 +3928,13 @@ function place(tx,ty){ if(!inB(tx,ty))return; const c=grid[ty][tx]; gridVersion+
     else toast('🛡 Pillage repelled','the watch held the line');
     refreshHUD(); return; }
   const it=S.tool; if(!it)return;
-  if(it.road){ if(!isLand(tx,ty)||mountain(c)||c.civ||c.zone)return; if(c.road)return; if(!spend(it.cost))return; c.road=1; c.br=(c.ter===WATER)?1:0; if(c.ter<GRASS&&c.ter!==WATER)c.ter=BARE; syncTraffic(); refreshHUD(); return; }
-  if(it.wire){ if(mountain(c)||c.civ||c.zone)return; if(!isLand(tx,ty)&&!c.road)return; if(c.wire)return; if(!spend(it.cost))return; c.wire=1; refreshHUD(); return; }
+  if(it.road){ if(!isLand(tx,ty)||mountain(c)||c.civ||c.zone)return; if(c.road)return; if(!spend(it.cost))return; c.road=1; c.br=(c.ter===WATER)?1:0; if(c.ter<GRASS&&c.ter!==WATER)c.ter=BARE; if(window.playBuild)playBuild(); syncTraffic(); refreshHUD(); return; }
+  if(it.wire){ if(mountain(c)||c.civ||c.zone)return; if(!isLand(tx,ty)&&!c.road)return; if(c.wire)return; if(!spend(it.cost))return; c.wire=1; if(window.playBuild)playBuild(); refreshHUD(); return; }
   if(it.zone!=null){ if(!isLand(tx,ty)||mountain(c)||occupied(c)||c.civ||c.ruin)return; if(!spend(it.cost))return; c.zone=it.zone; if(c.ter<GRASS||c.ter===FOREST){c.ter=GRASS;}
-    c.dev= nearRoad(tx,ty,3)?1:0; if(c.dev>0)c.own=CLIENT; render(); refreshHUD(); return; }
+    c.dev= nearRoad(tx,ty,3)?1:0; if(c.dev>0)c.own=CLIENT; if(window.playBuild)playBuild(); render(); refreshHUD(); return; }
   if(it.civ!=null){ if(!isLand(tx,ty)||mountain(c)||occupied(c)||c.civ||c.ruin)return; if(it.civ===VALID&&S.era<8){advise('Validators need the Quantum Edo age.');return;}
     if(!spend(it.cost))return; c.civ=it.civ; c.zone=0;c.dev=0; if(it.civ===VALID)c.own=CLIENT; if(c.ter===FOREST||c.ter<GRASS)c.ter=BARE; if(it.civ===FARM)c.ter=BARE;
-    rebuildCoverage(); syncTraffic(); refreshHUD(); return; }
+    if(window.playBuild)playBuild(); rebuildCoverage(); syncTraffic(); refreshHUD(); return; }
 }
 let dragging=false,dragPan=false,last=null,downPt=null,moved=false,pinched=false; const ptrs=new Map(); let pinch=null;
 function evp(e){const r=cv.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top];}
@@ -4510,6 +4511,94 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
 
 </script>
 
+<script id="ykUiSfx">
+/* ============================================================
+   SORU SHITI — UI Sound Effects
+   Web Audio API, sample-based. click/build/raze/error/notification.
+   Files expected beside index.html. Reuses sfxCtx() graph.
+   ============================================================ */
+(function(){
+  "use strict";
+  if (window.__uiSfx) return; window.__uiSfx = true;
+
+  var FILES = { click:'click.wav', build:'build.wav', raze:'raze.wav', error:'error.wav', notification:'notification.wav' };
+
+  var ctx = null, bus = null;
+  function ensureCtx(){
+    if (ctx) { if (ctx.state==='suspended') ctx.resume(); return ctx; }
+    try { ctx = (typeof sfxCtx === 'function') ? sfxCtx() : new (window.AudioContext||window.webkitAudioContext)(); }
+    catch(e){ ctx = null; }
+    if (!ctx) return null;
+    bus = ctx.createGain(); bus.gain.value = 0.7;
+    bus.connect(ctx.destination);
+    return ctx;
+  }
+
+  var bufferCache = {}, loadFailed = {}, loadingNow = {};
+  function loadSample(filename){
+    if (bufferCache[filename] || loadFailed[filename] || loadingNow[filename]) return;
+    var c = ensureCtx();
+    if (!c) return;
+    loadingNow[filename] = true;
+    var resolvedURL = new URL(filename, document.baseURI).href;
+    fetch(filename).then(function(res){
+      if (!res.ok) throw new Error('HTTP '+res.status+' at '+resolvedURL);
+      return res.arrayBuffer();
+    }).then(function(ab){ return c.decodeAudioData(ab); })
+    .then(function(buf){ bufferCache[filename]=buf; loadingNow[filename]=false; })
+    .catch(function(e){
+      loadFailed[filename]=true; loadingNow[filename]=false;
+      var msg='uiSfx sample missing/unreadable: '+filename+' — looked for it at '+resolvedURL+' ('+(e.message||e)+')';
+      if (window.__err) window.__err(msg); else console.warn(msg);
+    });
+  }
+  for (var k in FILES) loadSample(FILES[k]);
+
+  var lastPlay = {}; // filename -> last performance.now(), throttles spam to ~30ms
+  function play(filename, opts){
+    var c = ensureCtx();
+    if (!c) return;
+    var now = performance.now();
+    if (lastPlay[filename] && now-lastPlay[filename] < 30) return;
+    lastPlay[filename] = now;
+    if (!bufferCache[filename]) { loadSample(filename); return; } // not ready yet — drop silently
+    opts = opts || {};
+    var src = c.createBufferSource();
+    src.buffer = bufferCache[filename];
+    var rateJitter = (opts.pitchJitter==null?0.06:opts.pitchJitter);
+    src.playbackRate.value = 1 + (Math.random()*2-1)*rateJitter;
+    var g = c.createGain();
+    var baseVol = (opts.volume==null?1:opts.volume);
+    var volJitter = (opts.volJitter==null?0.12:opts.volJitter);
+    g.gain.value = Math.max(0, baseVol * (1 + (Math.random()*2-1)*volJitter));
+    src.connect(g); g.connect(bus||c.destination);
+    src.start(0);
+  }
+
+  function playClick(opts){ play(FILES.click, opts); }
+  function playBuild(opts){ play(FILES.build, opts); }
+  function playRaze(opts){ play(FILES.raze, opts); }
+  function playError(opts){ play(FILES.error, Object.assign({pitchJitter:0.03,volJitter:0.08}, opts||{})); }
+  function playNotification(opts){ play(FILES.notification, opts); }
+
+  window.playClick = playClick;
+  window.playBuild = playBuild;
+  window.playRaze = playRaze;
+  window.playError = playError;
+  window.playNotification = playNotification;
+
+  /* Delegated click sfx for buttons / tool tiles / toggles. Capture phase so it
+     fires even when a handler later calls stopPropagation(). Canvas placement
+     (#cv) is excluded — build/raze/error sfx for that path are fired explicitly
+     from place()/spend() so it doesn't also get a generic click sound. */
+  document.addEventListener('click', function(e){
+    var t = e.target.closest('button, .bbtn, .pbtn, .zb, #ykGear, #ykMin, .ykCard .pick');
+    if (!t || t.closest('#cv')) return;
+    playClick();
+  }, true);
+})();
+</script>
+
 <script id="ykGibberish">
 /* ============================================================
    SORU SHITI — Townsperson Gibberish Voice Layer (Simlish-style)
@@ -4560,8 +4649,8 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      Below GIB_Z_LOW: silent. Above GIB_Z_HIGH: full volume.
      Fades through the middle so it dies out by mid-map zoom and is
      fully gone at max zoom-out, per spec. */
-  var GIB_Z_LOW  = 0.55;
-  var GIB_Z_HIGH = 1.7;
+  var GIB_Z_LOW  = 0.45;
+  var GIB_Z_HIGH = 1.6;
   function zoomAudibility(){
     var z = (typeof cam !== 'undefined' && cam.zoom) ? cam.zoom : 0;
     if (z <= GIB_Z_LOW) return 0;
@@ -4660,17 +4749,11 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     if (!buf || !ctx) return 0;
     var src = ctx.createBufferSource();
     src.buffer = buf;
-    var rate = 0.78 + Math.random()*0.55;      // wider speed/pitch jitter, both down and up
+    var rate = 0.9 + Math.random()*0.25;       // playback speed/pitch jitter
     src.playbackRate.value = rate;
-    if (src.detune) src.detune.value = (Math.random()*2-1) * 220; // extra fine pitch variation, cents
-
-    var filt = ctx.createBiquadFilter();
-    filt.type = (Math.random()<0.7) ? 'bandpass' : 'lowpass';
-    filt.frequency.value = 700 + Math.random()*2600;
-    filt.Q.value = 0.5 + Math.random()*1.2;
 
     var amp = ctx.createGain();
-    var peak = (0.45 + Math.random()*0.4) * gainScale;
+    var peak = (0.55 + Math.random()*0.35) * gainScale;
     var dur = buf.duration / rate;
     var attack = Math.min(0.04, dur*0.15), release = Math.min(0.25, dur*0.35);
     amp.gain.setValueAtTime(0.0001, t0);
@@ -4678,7 +4761,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     amp.gain.setValueAtTime(peak, Math.max(t0+attack, t0+dur-release));
     amp.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
 
-    src.connect(filt); filt.connect(amp); amp.connect(voicesBus);
+    src.connect(amp); amp.connect(voicesBus);
     src.start(t0);
     src.stop(t0+dur+0.05);
     return dur;
@@ -4689,8 +4772,8 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      already short, self-contained utterances), followed by a pause
      whose length depends on the emotion's chattiness. */
   var EMO_RATE = { // phrases per ~second equivalent, used to derive rest length
-    idle:0.07, social:0.09, happy:0.08, laugh:0.05, worried:0.08,
-    sad:0.06, aggressive:0.13, scared:0.12, curious:0.07
+    idle:0.28, social:0.34, happy:0.4, laugh:0.5, worried:0.32,
+    sad:0.22, aggressive:0.5, scared:0.55, curious:0.3
   };
 
   function bankForVoice(voice){ return voice.gender==='f' ? FEMALE_BANK : MALE_BANK; }
@@ -4705,7 +4788,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
       dur = playSample(filename, t0, voice.gain);
     }
     var rate = EMO_RATE[voice.emotion] || EMO_RATE.idle;
-    var restMin = 3.5/rate, restMax = 9.0/rate;
+    var restMin = 1.6/rate, restMax = 3.6/rate;
     voice.nextAt = t0 + Math.max(dur,0.2) + restMin + Math.random()*(restMax-restMin);
     return dur;
   }
@@ -4725,10 +4808,9 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      -agent, keeping this decoupled from sim object lifecycles. */
   var pool = []; // {key, x, y, emotion, gender, gain, nextAt, agentRef}
   var poolIndex = {};
-  var MAX_CONCURRENT = 2;      // hard cap on simultaneously scheduled voices — kept rare/atmospheric
+  var MAX_CONCURRENT = 6;      // hard cap on simultaneously scheduled voices — kept sparse/atmospheric
   var GATHER_INTERVAL = 0.6;   // seconds between full re-gather passes
   var gatherT = 0;
-  var globalNextAt = 0;        // soft floor on any-voice playback so the island never feels chatty
 
   function genderForAgent(a, seed){
     // stable per-agent gender so the same townsperson sounds consistent
@@ -4740,12 +4822,11 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     if (a.nerve !== undefined) return a.respectful ? 'curious' : 'worried';
     if (a.watch > 0) return 'curious';
     var rg = (typeof inRaidRadius==='function') ? inRaidRadius(a) : nearAnyEncounter(a, 5);
-    if (rg) return Math.random()<0.5 ? 'worried' : 'scared';
+    if (rg) return 'worried';
     if (a.act==='temple' || a.act==='water') return Math.random()<0.5 ? 'idle' : 'curious';
-    if (a.pause>0 && Math.random()<0.3) return 'social';
-    if (Math.random()<0.025) return 'laugh';
-    if (Math.random()<0.03) return 'happy';
-    if (Math.random()<0.025) return 'sad';
+    if (a.pause>0 && Math.random()<0.4) return 'social';
+    if (Math.random()<0.06) return 'happy';
+    if (Math.random()<0.04) return 'sad';
     return 'idle';
   }
 
@@ -4837,7 +4918,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
   var curVol = 0;
   function updateMasterGain(dt){
     if (!ctx || !master) return;
-    var target = zoomAudibility() * 0.38; // overall ceiling — kept subtle/atmospheric
+    var target = zoomAudibility() * 0.5; // overall ceiling — kept subtle/atmospheric
     var rate = 2.0; // smoothing speed
     curVol += (target-curVol) * Math.min(1, dt*rate);
     if (Math.abs(curVol - master.gain.value) > 0.001) {
@@ -4871,11 +4952,9 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     for (var i=0;i<pool.length && activeCount < MAX_CONCURRENT;i++){
       var v = pool[i];
       if (v.nextAt <= now + 0.02) {
-        if (now < globalNextAt) continue; // global rarity floor — even if a voice is "due", hold off
-        var startAt = Math.max(now, globalNextAt) + Math.random()*0.08;
+        var startAt = now + Math.random()*0.08;
         var len = schedulePhrase(v, startAt);
         maybeChainReply(v, startAt+len);
-        globalNextAt = startAt + len + 1.1 + Math.random()*1.6;
         activeCount++;
       } else if (v.nextAt < now + 2.0) {
         activeCount++; // counts as "soon active" for concurrency budgeting
@@ -4896,7 +4975,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
       var v = pool[i];
       var dx=v.x-tx, dy=v.y-ty;
       if (dx*dx+dy*dy < radius*radius) {
-        v.emotion = (v.gender==='m' && Math.random()<0.35) ? 'aggressive' : 'scared';
+        v.emotion = (v.gender==='m' && Math.random()<0.5) ? 'aggressive' : 'scared';
         v.nextAt = now + Math.random()*0.4;
         burst++;
       }
