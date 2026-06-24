@@ -4610,7 +4610,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     social:  ['f-chat1.ogg','f-happy1.ogg'],
     happy:   ['f-happy1.ogg','f-laugh1.ogg','f-laugh2.ogg'],
     laugh:   ['f-laugh1.ogg','f-laugh2.ogg'],
-    worried: ['f-chat1.ogg','f-sad.ogg'],
+    worried: ['f-sad.ogg'],
     sad:     ['f-sad.ogg'],
     scared:  ['f-sad.ogg'],
     curious: ['f-chat1.ogg']
@@ -4620,7 +4620,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     social:    ['m-chat1.ogg','m-chat2.ogg','m-chat3.ogg','m-chat4.ogg','m-happy.ogg'],
     happy:     ['m-happy.ogg'],
     laugh:     ['m-happy.ogg'],
-    worried:   ['m-chat1.ogg','m-weird1.ogg','m-weird2.ogg'],
+    worried:   ['m-weird1.ogg','m-weird2.ogg'],
     aggressive:['m-angry.ogg'],
     scared:    ['m-weird1.ogg','m-weird2.ogg'],
     curious:   ['m-chat1.ogg','m-weird1.ogg']
@@ -4770,7 +4770,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
 
   function bankForVoice(voice){ return voice.gender==='f' ? FEMALE_BANK : MALE_BANK; }
 
-  var GLOBAL_MIN_GAP = 5.5; // seconds — absolute floor between any two phrases from the same voice, regardless of emotion rate
+  var GLOBAL_MIN_GAP = 9.5; // seconds — absolute floor between any two phrases from the same voice, regardless of emotion rate
 
   function schedulePhrase(voice, t0){
     var bank = bankForVoice(voice);
@@ -4805,7 +4805,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
   var GATHER_INTERVAL = 0.6;   // seconds between full re-gather passes
   var gatherT = 0;
   var voiceActiveUntil = 0;    // ctx.currentTime until which a sample is actually sounding — real concurrency gate
-  var GLOBAL_TRIGGER_CHANCE = 0.35; // even when a voice is "due", only fire this often — keeps it rare/atmospheric
+  var GLOBAL_TRIGGER_CHANCE = 0.16; // even when a voice is "due", only fire this often — keeps it rare/atmospheric
 
   function genderForAgent(a, seed){
     // stable per-agent gender so the same townsperson sounds consistent
@@ -4918,7 +4918,15 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
   var curVol = 0;
   function updateMasterGain(dt){
     if (!ctx || !master) return;
-    var target = zoomAudibility() * 0.5; // overall ceiling — kept subtle/atmospheric
+    var raidDuck = 1;
+    try {
+      if (typeof encounters !== 'undefined') {
+        for (var i=0;i<encounters.length;i++){
+          if (encounters[i].state==='duel' || encounters[i].state==='assault'){ raidDuck = 0.45; break; }
+        }
+      }
+    } catch(e){}
+    var target = zoomAudibility() * 0.38 * raidDuck; // overall ceiling — kept subtle/atmospheric
     var rate = 2.0; // smoothing speed
     curVol += (target-curVol) * Math.min(1, dt*rate);
     if (Math.abs(curVol - master.gain.value) > 0.001) {
@@ -4955,7 +4963,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
       if (v.nextAt <= now + 0.02) {
         if (Math.random() > GLOBAL_TRIGGER_CHANCE) {
           // skip this cycle but don't let it go silent forever — push a short retry window
-          v.nextAt = now + 0.6 + Math.random()*0.8;
+          v.nextAt = now + 1.4 + Math.random()*1.6;
           continue;
         }
         var startAt = now + Math.random()*0.08;
@@ -5023,12 +5031,12 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
       ctx = (typeof sfxCtx === 'function') ? sfxCtx() : new (window.AudioContext||window.webkitAudioContext)();
     } catch(e){ ctx = null; }
     if (!ctx) return null;
-    bus = ctx.createGain(); bus.gain.value = 0.85;
+    bus = ctx.createGain(); bus.gain.value = 1.35;
     var comp = null;
     try {
       comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -22; comp.knee.value = 14; comp.ratio.value = 3.5;
-      comp.attack.value = 0.003; comp.release.value = 0.12;
+      comp.threshold.value = -18; comp.knee.value = 10; comp.ratio.value = 2.4;
+      comp.attack.value = 0.002; comp.release.value = 0.09;
     } catch(e){}
     bus.connect(comp || master || ((typeof sfxDest==='function')?sfxDest(ctx):ctx.destination));
     if (comp) comp.connect((typeof sfxDest==='function')?sfxDest(ctx):ctx.destination);
@@ -5084,12 +5092,12 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      Metal-on-metal: bright noise burst shaped by a sharp bandpass,
      layered with 2-3 inharmonic ring partials for "shimmer". */
   var CLASH_VARIANTS = [
-    { freq: 2600, q: 7,  partials:[1, 2.41, 3.88], ringG: 0.30, noiseG: 0.55, dur: 0.16, tone:'sharp' },
-    { freq: 2100, q: 5,  partials:[1, 2.0, 3.2],   ringG: 0.34, noiseG: 0.50, dur: 0.20, tone:'resonant' },
-    { freq: 3100, q: 9,  partials:[1, 2.76],       ringG: 0.24, noiseG: 0.60, dur: 0.13, tone:'sharp' },
-    { freq: 1750, q: 4,  partials:[1, 1.78, 2.9],  ringG: 0.38, noiseG: 0.45, dur: 0.26, tone:'resonant' },
-    { freq: 2850, q: 8,  partials:[1, 2.55, 4.1],  ringG: 0.26, noiseG: 0.58, dur: 0.15, tone:'sharp' },
-    { freq: 2300, q: 6,  partials:[1, 2.2, 3.5],   ringG: 0.32, noiseG: 0.52, dur: 0.19, tone:'resonant' }
+    { freq: 2600, q: 7,  partials:[1, 2.41, 3.88], ringG: 0.46, noiseG: 0.78, dur: 0.16, tone:'sharp' },
+    { freq: 2100, q: 5,  partials:[1, 2.0, 3.2],   ringG: 0.50, noiseG: 0.72, dur: 0.20, tone:'resonant' },
+    { freq: 3100, q: 9,  partials:[1, 2.76],       ringG: 0.38, noiseG: 0.84, dur: 0.13, tone:'sharp' },
+    { freq: 1750, q: 4,  partials:[1, 1.78, 2.9],  ringG: 0.54, noiseG: 0.65, dur: 0.26, tone:'resonant' },
+    { freq: 2850, q: 8,  partials:[1, 2.55, 4.1],  ringG: 0.40, noiseG: 0.82, dur: 0.15, tone:'sharp' },
+    { freq: 2300, q: 6,  partials:[1, 2.2, 3.5],   ringG: 0.48, noiseG: 0.74, dur: 0.19, tone:'resonant' }
   ];
   function playClash(opts){
     var c = ensureCtx(); if (!c) return;
@@ -5117,10 +5125,10 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      Whoosh: filtered noise with a fast frequency sweep (bandpass
      center moves), no metallic ring — just air being cut. */
   var SWING_VARIANTS = [
-    { startF: 1800, endF: 600,  dur: 0.16, q: 1.4, gain: 0.30, label:'fast-light'  },
-    { startF: 1200, endF: 350,  dur: 0.24, q: 1.1, gain: 0.34, label:'heavy'       },
-    { startF: 2200, endF: 800,  dur: 0.12, q: 1.6, gain: 0.26, label:'fast-light'  },
-    { startF: 1500, endF: 450,  dur: 0.20, q: 1.2, gain: 0.32, label:'medium'      }
+    { startF: 1800, endF: 600,  dur: 0.16, q: 1.4, gain: 0.46, label:'fast-light'  },
+    { startF: 1200, endF: 350,  dur: 0.24, q: 1.1, gain: 0.50, label:'heavy'       },
+    { startF: 2200, endF: 800,  dur: 0.12, q: 1.6, gain: 0.42, label:'fast-light'  },
+    { startF: 1500, endF: 450,  dur: 0.20, q: 1.2, gain: 0.48, label:'medium'      }
   ];
   function playSwing(opts){
     var c = ensureCtx(); if (!c) return;
@@ -5151,10 +5159,10 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      Blade hitting something solid (armor/body) — duller thud than
      a clash: low-passed noise thump + a short low ring partial. */
   var IMPACT_VARIANTS = [
-    { thumpF: 220, thumpQ: 1.2, ringF: 140, dur: 0.18, gain: 0.42, label:'soft'   },
-    { thumpF: 340, thumpQ: 1.6, ringF: 210, dur: 0.14, gain: 0.46, label:'sharp'  },
-    { thumpF: 180, thumpQ: 1.0, ringF: 110, dur: 0.22, gain: 0.40, label:'heavy'  },
-    { thumpF: 280, thumpQ: 1.4, ringF: 170, dur: 0.16, gain: 0.44, label:'medium' }
+    { thumpF: 220, thumpQ: 1.2, ringF: 140, dur: 0.18, gain: 0.62, label:'soft'   },
+    { thumpF: 340, thumpQ: 1.6, ringF: 210, dur: 0.14, gain: 0.66, label:'sharp'  },
+    { thumpF: 180, thumpQ: 1.0, ringF: 110, dur: 0.22, gain: 0.58, label:'heavy'  },
+    { thumpF: 280, thumpQ: 1.4, ringF: 170, dur: 0.16, gain: 0.64, label:'medium' }
   ];
   function playImpact(opts){
     var c = ensureCtx(); if (!c) return;
@@ -5214,7 +5222,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      Caps simultaneous voices so a big multi-duel raid doesn't spike
      CPU or clip the bus; oldest-active accounting via a simple counter
      with timed release rather than tracking node references. */
-  var MAX_VOICES = 24;
+  var MAX_VOICES = 40;
   var activeVoices = 0;
   function withVoiceBudget(durEstimate, fn){
     if (activeVoices >= MAX_VOICES) return false;
@@ -5256,6 +5264,252 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
 
   function tryResume(){ if (ctx && ctx.state==='suspended') ctx.resume(); }
   window.addEventListener('pointerdown', tryResume, {passive:true});
+
+})();
+</script>
+<script>
+/* ============================ YOKAI & MYTHOLOGY SOUND SYSTEM ============================
+   Pure synthesized Web Audio (no external assets). Reuses sfxCtx()/_sfxGain/optGet from the
+   existing fire-bell SFX module — call sfxCtx() once elsewhere before this runs, or this
+   module's own ykCtx() fallback will lazily create the shared context. ========================= */
+(function(){
+'use strict';
+
+function ykCtx(){
+  if(typeof sfxCtx==='function'){ const c=sfxCtx(); if(c) return c; }
+  try{
+    if(!window._ykActx) window._ykActx=new (window.AudioContext||window.webkitAudioContext)();
+    if(window._ykActx.state==='suspended') window._ykActx.resume();
+    return window._ykActx;
+  }catch(e){ return null; }
+}
+function ykDest(ctx){
+  if(typeof sfxDest==='function'){ try{ return sfxDest(ctx); }catch(e){} }
+  return ctx.destination;
+}
+function ykVol(){
+  const base=(typeof optGet==='function') ? optGet('opt_yokaiVol',0.32) : 0.32;
+  try{
+    if(typeof encounters!=='undefined'){
+      for(let i=0;i<encounters.length;i++){
+        const st=encounters[i].state;
+        if(st==='duel'||st==='assault') return base*0.4;
+      }
+    }
+  }catch(e){}
+  return base;
+}
+
+/* ---- shared low-level synth helpers (self-contained) ---- */
+function mkNoise(ctx,dur){
+  const sr=ctx.sampleRate, n=Math.max(1,Math.floor(sr*dur));
+  const buf=ctx.createBuffer(1,n,sr), d=buf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=Math.random()*2-1;
+  const src=ctx.createBufferSource(); src.buffer=buf; return src;
+}
+function envGain(ctx,t0,peak,attack,hold,release){
+  const g=ctx.createGain();
+  g.gain.setValueAtTime(0.0001,t0);
+  g.gain.exponentialRampToValueAtTime(Math.max(peak,0.0002),t0+attack);
+  g.gain.setValueAtTime(Math.max(peak,0.0002),t0+attack+hold);
+  g.gain.exponentialRampToValueAtTime(0.0001,t0+attack+hold+release);
+  return g;
+}
+function mkFilter(ctx,type,freq,q){
+  const f=ctx.createBiquadFilter(); f.type=type; f.frequency.value=freq; if(q!=null)f.Q.value=q; return f;
+}
+function glide(osc,t0,f0,f1,t1){
+  osc.frequency.setValueAtTime(f0,t0);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(f1,1),t1);
+}
+function shimmerPan(ctx){ try{ const p=ctx.createStereoPanner(); p.pan.value=(Math.random()*2-1)*0.5; return p; }catch(e){ return null; } }
+
+/* ===================== CATEGORY 1 — AMBIENT YOKAI PRESENCE ===================== */
+function sfxAmbientPresence(opts){
+  const ctx=ykCtx(); if(!ctx) return; const dest=ykDest(ctx); const t0=ctx.currentTime;
+  const vol=ykVol()*0.25*((opts&&opts.intensity)||1);
+  const dur=2.6+Math.random()*1.8;
+
+  const src=mkNoise(ctx,dur);
+  const bp=mkFilter(ctx,'bandpass', 700+Math.random()*500, 1.8);
+  const g=envGain(ctx,t0,vol*0.5,0.6,dur*0.3,dur*0.6);
+  const pan=shimmerPan(ctx);
+  bp.frequency.setValueAtTime(bp.frequency.value,t0);
+  bp.frequency.linearRampToValueAtTime(bp.frequency.value*(0.5+Math.random()*0.6),t0+dur);
+  src.connect(bp).connect(g);
+  (pan? g.connect(pan).connect(dest) : g.connect(dest));
+  src.start(t0); src.stop(t0+dur+0.1);
+
+  if(Math.random()<0.6){
+    const o=ctx.createOscillator(); o.type='sine';
+    const base=1400+Math.random()*900;
+    o.frequency.setValueAtTime(base,t0+dur*0.2);
+    o.frequency.exponentialRampToValueAtTime(base*0.7,t0+dur*0.9);
+    const og=envGain(ctx,t0+dur*0.15,vol*0.25,0.4,dur*0.2,dur*0.5);
+    o.connect(og).connect(dest); o.start(t0+dur*0.15); o.stop(t0+dur+0.1);
+  }
+}
+
+/* ===================== CATEGORY 2 — AGGRESSIVE / HOSTILE YOKAI ===================== */
+function sfxHostile(opts){
+  const ctx=ykCtx(); if(!ctx) return; const dest=ykDest(ctx); const t0=ctx.currentTime;
+  const vol=ykVol()*0.5*((opts&&opts.intensity)||1);
+  const big=(opts&&opts.big)||false;
+
+  const src=mkNoise(ctx,big?3.2:1.6);
+  const lp=mkFilter(ctx,'lowpass', big?220:340, 4.5);
+  const g=envGain(ctx,t0,vol*0.8,0.05,big?1.6:0.7,big?1.4:0.6);
+  src.connect(lp).connect(g).connect(dest);
+  src.start(t0); src.stop(t0+(big?3.3:1.7));
+
+  const freqs=big?[58,61.6,87,98]:[110,116.5,165];
+  freqs.forEach((f,i)=>{
+    const o=ctx.createOscillator(); o.type='sawtooth'; o.frequency.value=f; o.detune.value=(Math.random()*14-7);
+    const og=envGain(ctx,t0+i*0.03,vol*(big?0.45:0.32)/(i*0.6+1),0.08,big?1.2:0.5,big?1.0:0.5);
+    const lp2=mkFilter(ctx,'lowpass',big?500:700,1);
+    o.connect(lp2).connect(og).connect(dest); o.start(t0+i*0.03); o.stop(t0+(big?2.5:1.3));
+  });
+
+  if(big){
+    for(let k=0;k<5;k++){
+      const dt0=t0+0.4+Math.random()*1.8;
+      const o=ctx.createOscillator(); o.type='square'; o.frequency.value=900+Math.random()*700;
+      const og=envGain(ctx,dt0,vol*0.18,0.002,0.01,0.06+Math.random()*0.05);
+      const hp=mkFilter(ctx,'highpass',600,1);
+      o.connect(hp).connect(og).connect(dest); o.start(dt0); o.stop(dt0+0.15);
+    }
+  }
+}
+
+/* ===================== CATEGORY 3 — MYSTERIOUS / ETHEREAL YOKAI ===================== */
+function sfxEthereal(opts){
+  const ctx=ykCtx(); if(!ctx) return; const dest=ykDest(ctx); const t0=ctx.currentTime;
+  const vol=ykVol()*0.35*((opts&&opts.intensity)||1);
+  const variant=(opts&&opts.variant)||(['chime','whisper','cry'][(Math.random()*3)|0]);
+
+  if(variant==='chime'){
+    const root=440*Math.pow(2,((Math.random()*7)|0)/12);
+    const partials=[1,2.0,2.76,4.0];
+    partials.forEach((p,i)=>{
+      const o=ctx.createOscillator(); o.type='sine'; o.frequency.value=root*p;
+      const dur=1.6+Math.random()*0.8;
+      const og=envGain(ctx,t0+i*0.04,vol*0.5/(i*0.8+1),0.01,dur*0.15,dur*0.85);
+      const pan=shimmerPan(ctx);
+      (pan? og.connect(pan).connect(dest) : og.connect(dest));
+      o.connect(og); o.start(t0+i*0.04); o.stop(t0+dur+0.1);
+    });
+  } else if(variant==='whisper'){
+    const dur=1.8+Math.random()*1.0;
+    const src=mkNoise(ctx,dur);
+    const bp=mkFilter(ctx,'bandpass',1800+Math.random()*1200,2.4);
+    const g=envGain(ctx,t0,vol*0.35,0.25,dur*0.3,dur*0.5);
+    const pan=shimmerPan(ctx);
+    src.connect(bp).connect(g);
+    (pan? g.connect(pan).connect(dest): g.connect(dest));
+    src.start(t0); src.stop(t0+dur+0.1);
+  } else {
+    const o=ctx.createOscillator(); o.type='sine';
+    const f0=900+Math.random()*300;
+    const dur=2.0+Math.random()*0.8;
+    glide(o,t0,f0,f0*0.45,t0+dur);
+    const og=envGain(ctx,t0,vol*0.4,0.3,dur*0.3,dur*0.5);
+    const lp=mkFilter(ctx,'lowpass',2200,0.7);
+    o.connect(lp).connect(og).connect(dest); o.start(t0); o.stop(t0+dur+0.1);
+  }
+}
+
+/* ===================== CATEGORY 4 — YOKAI APPEARANCE / MANIFESTATION ===================== */
+const MANIFEST_PROFILE={
+  ryu:        {type:'cry',    intensity:0.9},
+  tennyo:     {type:'chime',  intensity:0.7},
+  oni:        {type:'hostile',intensity:0.8},
+  tengu:      {type:'whisper',intensity:0.7},
+  kitsune:    {type:'chime',  intensity:0.55},
+  hitodama:   {type:'whisper',intensity:0.45},
+  kappa:      {type:'whisper',intensity:0.5},
+  tanuki:     {type:'ambient',intensity:0.5},
+  yukionna:   {type:'cry',    intensity:0.6},
+  kasaobake:  {type:'chime',  intensity:0.4},
+  bakeneko:   {type:'whisper',intensity:0.55},
+  nurarihyon: {type:'ambient',intensity:0.5},
+  gashadokuro:{type:'hostile',intensity:1.0,big:true}
+};
+function sfxManifestScaled(kind,mult){
+  const p=MANIFEST_PROFILE[kind]||{type:'ambient',intensity:0.5};
+  const intensity=p.intensity*(mult||1);
+  if(p.type==='hostile') sfxHostile({intensity,big:!!p.big});
+  else if(p.type==='ambient') sfxAmbientPresence({intensity});
+  else sfxEthereal({variant:p.type==='cry'?'cry':(p.type==='chime'?'chime':'whisper'),intensity});
+}
+
+/* ===================== CATEGORY 5 — YOKAI INTERACTION ===================== */
+function sfxInteraction(opts){
+  const ctx=ykCtx(); if(!ctx) return; const dest=ykDest(ctx); const t0=ctx.currentTime;
+  const vol=ykVol()*0.45*((opts&&opts.intensity)||1);
+  const benevolent=(opts&&opts.benevolent!==false);
+
+  if(benevolent){
+    const root=660*Math.pow(2,((Math.random()*4)|0)/12);
+    [1,1.5,2].forEach((p,i)=>{
+      const o=ctx.createOscillator(); o.type='triangle'; o.frequency.value=root*p;
+      const og=envGain(ctx,t0+i*0.02,vol*0.4/(i+1),0.005,0.05,0.25);
+      o.connect(og).connect(dest); o.start(t0+i*0.02); o.stop(t0+0.4);
+    });
+  } else {
+    const src=mkNoise(ctx,0.35);
+    const bp=mkFilter(ctx,'bandpass',500,3);
+    const g=envGain(ctx,t0,vol*0.5,0.01,0.05,0.25);
+    src.connect(bp).connect(g).connect(dest); src.start(t0); src.stop(t0+0.4);
+    const o=ctx.createOscillator(); o.type='sawtooth';
+    glide(o,t0,260,90,t0+0.3);
+    const og=envGain(ctx,t0,vol*0.3,0.01,0.04,0.22);
+    o.connect(og).connect(dest); o.start(t0); o.stop(t0+0.35);
+  }
+}
+
+/* ===================== REACTIVE LAYER ===================== */
+const YK_STATE={ lastInteractionByKind:{} };
+function ykNow(){ return (typeof performance!=='undefined') ? performance.now() : Date.now(); }
+
+function ykEraScale(){
+  try{
+    const era=(typeof S!=='undefined'&&S.era!=null)?S.era:4;
+    if(era===7) return {hostile:1.25, ethereal:0.85, ambient:0.9};
+    if(era===8) return {hostile:0.9,  ethereal:1.2,  ambient:1.0};
+    return {hostile:1.0, ethereal:1.0, ambient:1.0};
+  }catch(e){ return {hostile:1,ethereal:1,ambient:1}; }
+}
+
+if(typeof window!=='undefined'){
+  const _origAnnounce=(typeof announce==='function')?announce:null;
+  window.announce=function(k){
+    if(_origAnnounce) _origAnnounce(k);
+    try{
+      const scale=ykEraScale();
+      const p=MANIFEST_PROFILE[k];
+      const mult=p&&p.type==='hostile'?scale.hostile:(p&&p.type==='ambient'?scale.ambient:scale.ethereal);
+      sfxManifestScaled(k, mult);
+    }catch(e){}
+  };
+}
+
+function ykOnInteraction(kind,benevolent){
+  const now=ykNow(); const last=YK_STATE.lastInteractionByKind[kind]||0;
+  if(now-last<900) return;
+  YK_STATE.lastInteractionByKind[kind]=now;
+  const scale=ykEraScale();
+  const malKinds={oni:1,gashadokuro:1};
+  sfxInteraction({intensity:(malKinds[kind]?scale.hostile:scale.ethereal)*0.9, benevolent: benevolent!==false && !malKinds[kind]});
+}
+
+window.YokaiSFX={
+  ambient: sfxAmbientPresence,
+  hostile: sfxHostile,
+  ethereal: sfxEthereal,
+  manifest: sfxManifestScaled,
+  interaction: ykOnInteraction,
+  setVolume: function(v){ if(typeof optSet==='function') optSet('opt_yokaiVol', Math.max(0,Math.min(1,v))); }
+};
 
 })();
 </script>
