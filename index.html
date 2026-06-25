@@ -719,10 +719,12 @@ const AGEPAL=[
  /*8 QUANTUM */ {grass:'#2c5346',forest:'#1c3a34',ground:'#244038',water:'#14506a',sand:'#3a5a5e',tree:'#1a3a30', wet:0.85,dry:0.10,neon:1},
 ];
 function agePal(){ return AGEPAL[Math.min(S.era|0,AGEPAL.length-1)]; }
-/* ===== SUMI-E INK-WASH: collapse a terrain colour to monochrome on a warm rice-paper axis,
-   with a gentle contrast push so the island reads as a black-&-white ink painting. Only natural
-   terrain (ground/trees/rocks/roads/fields) is routed through here — buildings, people, cherry
-   blossoms, fire, blood and yokai never pass through inkize and keep their full vibrant colour. */
+/* ===== SUMI-E INK-WASH: collapse a terrain colour to true neutral greyscale, with a gentle
+   contrast push so the island reads as a black-&-white ink painting. Only natural terrain
+   (ground/trees/rocks/roads/fields) is routed through here — buildings, people, cherry
+   blossoms, fire, blood and yokai never pass through inkize and keep their full vibrant colour.
+   Water (its own spirit-water/frozen pipeline) and the icy void-rim (its own gradient pipeline)
+   never call inkize either, so they stay coloured. */
 function inkize(hex){
   if(!VOID||!hex||hex[0]!=='#'||hex.length<7) return hex;
   const n=parseInt(hex.slice(1),16); const r=(n>>16)&255,g=(n>>8)&255,b=n&255;
@@ -730,9 +732,8 @@ function inkize(hex){
   // wider contrast curve pivoted slightly below mid-gray (rice-paper tends light, ink pools dark),
   // so mid-tone earth/grass hexes spread across a real tonal range instead of collapsing to mud.
   y=118+(y-118)*1.55;
-  const cl=v=>v<0?0:v>255?255:v|0, t=(y-118)/118;
-  const rr=cl(y+t*9+8), gg=cl(y+t*4+3), bb=cl(y-t*10-10);   // warm paper highlights, cool ink shadows
-  return '#'+((1<<24)|(rr<<16)|(gg<<8)|bb).toString(16).slice(1);
+  const cl=v=>v<0?0:v>255?255:v|0, yy=cl(y);                 // true neutral grey — no warm/cool split
+  return '#'+((1<<24)|(yy<<16)|(yy<<8)|yy).toString(16).slice(1);
 }
 /* the 28 traditional Lunar Mansions (二十八宿) — pure atmospheric lore accent scattered through
    the void as a minimal starfield. No gameplay system, no interactivity, no glyphs or labels:
@@ -3144,7 +3145,11 @@ const encounters=[], corpses=[]; let scarGrid=null, encTimer=22;
 
 /* ===== RAID GORE FX — airborne blood sprays, persistent ground stains, collapse debris.
    All purely cosmetic: they NEVER write to economy/value (scars + dev still own that). ===== */
-const sprays=[], stains=[], debris=[];
+const sprays=[], stains=[], debris=[], clashSparks=[];
+function addClashSpark(x,y){ if(clashSparks.length>40)clashSparks.shift();
+  for(let k=0;k<5+((Math.random()*4)|0);k++){ const a=Math.random()*6.283, sp=1.4+Math.random()*2.6;
+    clashSparks.push({ x,y, h:3+Math.random()*2.5, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp*0.6, vh:4+Math.random()*4,
+      life:0, max:0.22+Math.random()*0.12 }); } }
 function addSpray(x,y,n,power){ power=power||1; for(let k=0;k<n;k++){ const a=Math.random()*6.283, sp=(0.5+Math.random()*1.7)*power;
   sprays.push({ x, y, h:(2+Math.random()*4), vx:Math.cos(a)*sp, vy:Math.sin(a)*sp*0.6, vh:2.4+Math.random()*3.2,
     r:0.5+Math.random()*1.3, life:0, max:1.0+Math.random()*0.6 }); } }
@@ -3161,7 +3166,9 @@ function updateGore(dt){
     if(p.life>=p.max) sprays.splice(i,1); }
   for(let i=stains.length-1;i>=0;i--){ if((stains[i].t+=dt)>=stains[i].life) stains.splice(i,1); }
   for(let i=debris.length-1;i>=0;i--){ const d=debris[i]; d.t+=dt; d.x+=d.vx*dt; d.y+=d.vy*dt; d.h+=d.vh*dt; d.vh-=19*dt; d.rot+=d.vr;
-    if(d.h<0){ d.h=0; d.vh=0; d.vx*=0.4; d.vy*=0.4; } if(d.t>=d.life) debris.splice(i,1); } }
+    if(d.h<0){ d.h=0; d.vh=0; d.vx*=0.4; d.vy*=0.4; } if(d.t>=d.life) debris.splice(i,1); }
+  for(let i=clashSparks.length-1;i>=0;i--){ const p=clashSparks[i]; p.life+=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.h+=p.vh*dt; p.vh-=22*dt;
+    if(p.life>=p.max||p.h<=0) clashSparks.splice(i,1); } }
 
 /* one household member cut down at (hx,hy): corpse + dismemberment + arterial spray + pooling blood */
 function raidKill(e,hx,hy){ const sk=SKIN[(Math.random()*SKIN.length)|0], cl=KIM[(Math.random()*KIM.length)|0];
@@ -3210,14 +3217,22 @@ function landHitOnRonin(e,guard,ronin){ ronin.hp=(ronin.hp==null?1:ronin.hp)-1;
 /* per-guard duel cycle, symmetric to roninCombatTick: seek a living attacker, close, wind up, cut, recover.
    Only runs for e.defenders that have .guard===true and only during 'duel' (the resistance-roll branch). */
 function guardCombatTick(e,d,dt,mob){
-  if(d.wind>0){ d.wind-=dt; const tgt=mob[d.target]; if(tgt){ const dx=tgt.x-d.x; d.dir=dx<0?-1:1; }
-    if(d.wind<=0){ d.wind=0; d.swing=d.swingMax; d.hitFired=false; if(window.SoruBattleSFX) window.SoruBattleSFX.swing(); } return; }
+  if(d.blockT>0){ d.blockT-=dt; if(d.blockT<0)d.blockT=0; }
+  if(d.dodgeT>0){ d.dodgeT-=dt; if(d.dodgeT<0)d.dodgeT=0; }
+  if(d.wind>0){ d.wind-=dt; const tgt=mob[d.target]; if(tgt){ const dx=tgt.x-d.x; d.dir=dx<0?-1:1;
+      // a defender watching an incoming cut gets one chance to brace or break away before it lands
+      if(!d.reacted && tgt.wind!=null && tgt.wind<=tgt.windMax*0.4 && tgt.swing<=0){ d.reacted=true;
+        const r=Math.random(); if(r<0.30){ d.blockT=0.30; d.blockDir=d.dir; }
+        else if(r<0.46){ d.dodgeT=0.26; d.dodgeDX=(Math.random()<0.5?-1:1)*1.1; } } }
+    if(d.wind<=0){ d.wind=0; d.swing=d.swingMax; d.hitFired=false; d.reacted=false; if(window.SoruBattleSFX) window.SoruBattleSFX.swing(); } return; }
   if(d.swing>0){ d.swing-=dt; const tgt=mob[d.target];
     if(tgt){ const dx=tgt.x-d.x; d.dir=dx<0?-1:1;
       const elapsed=1-(d.swing/(d.swingMax||0.4)), cf=(d.swingType==='thrust')?0.5:(d.swingType==='sweep'?0.6:0.65);
       if(!d.hitFired && elapsed>=cf){ d.hitFired=true;
-        if(tgt.state!=='down') landHitOnRonin(e,d,tgt);
-        else if(window.SoruBattleSFX) window.SoruBattleSFX.parry(); } }
+        if(tgt.state==='down'){ if(window.SoruBattleSFX) window.SoruBattleSFX.parry(); }
+        else if(tgt.blockT>0){ addClashSpark(d.x,d.y); if(window.SoruBattleSFX) window.SoruBattleSFX.parry(); tgt.blockT=Math.max(0,tgt.blockT-0.08); }
+        else if(tgt.dodgeT>0){ if(window.SoruBattleSFX) window.SoruBattleSFX.parry(); }
+        else landHitOnRonin(e,d,tgt); } }
     if(d.swing<=0){ d.swing=0; d.recover=0.22+Math.random()*0.14; } return; }
   if(d.recover>0){ d.recover-=dt; if(d.recover<0)d.recover=0; return; }
   if(d.target==null || !mob[d.target] || mob[d.target].state==='down'){
@@ -3226,7 +3241,8 @@ function guardCombatTick(e,d,dt,mob){
     d.target=best>=0?best:null; }
   if(d.target==null) return;
   const tgt=mob[d.target], dx=tgt.x-d.x,dy=tgt.y-d.y,dist=Math.hypot(dx,dy)||1;
-  if(dist>0.8){ d.x+=dx/dist*1.5*dt; d.y+=dy/dist*1.5*dt; d.dir=dx<0?-1:1; }
+  if(dist>0.8){ d.x+=dx/dist*1.5*dt; d.y+=dy/dist*1.5*dt; d.dir=dx<0?-1:1;
+    d.circ=(d.circ||0)+dt*0.6; d.x+=Math.cos(d.circ)*0.18*dt; d.y+=Math.sin(d.circ)*0.10*dt; }   // closing footwork drifts, not a straight beeline
   else { d.dir=dx<0?-1:1; const types=['chop','diag','thrust']; d.swingType=types[(Math.random()*types.length)|0];
     d.wind=0.16+Math.random()*0.10; d.windMax=d.wind; d.swingMax=(d.swingType==='thrust')?0.34:0.40; } }
 
@@ -3235,14 +3251,20 @@ function guardCombatTick(e,d,dt,mob){
 function roninCombatTick(e,m,dt,defenders,rtx,rty){
   if(m.state==='down') return;                                                          // dead weight — out of the fight
   if(m.flinchT>0){ m.flinchT-=dt; if(m.flinchT<=0)m.flinchT=0; return; }                  // staggered by a counter-hit
-  if(m.wind>0){ m.wind-=dt; const tgt=defenders[m.target]; if(tgt){ const dx=tgt.x-m.x; m.dir=dx<0?-1:1; }
-    if(m.wind<=0){ m.wind=0; m.swing=m.swingMax; m.hitFired=false; if(window.SoruBattleSFX) window.SoruBattleSFX.swing(); } return; }
+  if(m.blockT>0){ m.blockT-=dt; if(m.blockT<0)m.blockT=0; }
+  if(m.dodgeT>0){ m.dodgeT-=dt; if(m.dodgeT<0)m.dodgeT=0; }
+  if(m.wind>0){ m.wind-=dt; const tgt=defenders[m.target]; if(tgt){ const dx=tgt.x-m.x; m.dir=dx<0?-1:1;
+      if(!m.reacted && tgt.guard && tgt.wind!=null && tgt.wind<=tgt.windMax*0.4 && tgt.swing<=0){ m.reacted=true;
+        const r=Math.random(); if(r<0.22){ m.blockT=0.28; } else if(r<0.36){ m.dodgeT=0.24; m.dodgeDX=(Math.random()<0.5?-1:1)*1.1; } } }
+    if(m.wind<=0){ m.wind=0; m.swing=m.swingMax; m.hitFired=false; m.reacted=false; if(window.SoruBattleSFX) window.SoruBattleSFX.swing(); } return; }
   if(m.swing>0){ m.swing-=dt; const tgt=defenders[m.target];
     if(tgt){ const dx=tgt.x-m.x; m.dir=dx<0?-1:1;
       const elapsed=1-(m.swing/(m.swingMax||0.4)), cf=(m.swingType==='thrust')?0.5:(m.swingType==='sweep'?0.6:0.65);
       if(!m.hitFired && elapsed>=cf){ m.hitFired=true;
-        if(tgt.state==='idle') landHit(e,m,tgt);
-        else if(window.SoruBattleSFX) window.SoruBattleSFX.parry(); } }
+        if(tgt.state!=='idle'){ /* already down or struck — no hit */ }
+        else if(tgt.blockT>0){ addClashSpark(m.x,m.y); if(window.SoruBattleSFX) window.SoruBattleSFX.parry(); tgt.blockT=Math.max(0,tgt.blockT-0.08); }
+        else if(tgt.dodgeT>0){ if(window.SoruBattleSFX) window.SoruBattleSFX.parry(); }
+        else landHit(e,m,tgt); } }
     if(m.swing<=0){ m.swing=0; m.recover=0.22+Math.random()*0.14; } return; }
   if(m.recover>0){ m.recover-=dt; if(m.recover<0)m.recover=0; return; }
   if(m.target==null || !defenders[m.target] || defenders[m.target].state!=='idle'){
@@ -3251,7 +3273,8 @@ function roninCombatTick(e,m,dt,defenders,rtx,rty){
     m.target=best>=0?best:null; }
   if(m.target==null){ const dx=rtx-m.x,dy=rty-m.y,d=Math.hypot(dx,dy)||1; m.dir=dx<0?-1:1; return; }   // no one left standing — wait for destruct
   const tgt=defenders[m.target], dx=tgt.x-m.x,dy=tgt.y-m.y,d=Math.hypot(dx,dy)||1;
-  if(d>0.8){ m.x+=dx/d*m.spd*1.25*dt; m.y+=dy/d*m.spd*1.25*dt; m.dir=dx<0?-1:1; m.ph+=dt*9; }          // close the gap
+  if(d>0.8){ m.x+=dx/d*m.spd*1.25*dt; m.y+=dy/d*m.spd*1.25*dt; m.dir=dx<0?-1:1; m.ph+=dt*9;
+    m.circ=(m.circ||Math.random()*6.28)+dt*0.7; m.x+=Math.cos(m.circ)*0.2*dt; m.y+=Math.sin(m.circ)*0.11*dt; }          // close the gap, with live footwork drift
   else { m.dir=dx<0?-1:1; const types=['chop','diag','sweep','thrust']; m.swingType=types[(Math.random()*types.length)|0];   // varied cuts, no repeating arc
     m.wind=0.14+Math.random()*0.10; m.windMax=m.wind; m.swingMax=(m.swingType==='thrust')?0.34:(m.swingType==='sweep'?0.42:0.40); } }
 
@@ -3330,9 +3353,10 @@ function updateRaid(e,dt,near){ e.st+=dt; const arson=e.raidAction==='arson'; co
       for(const m of e.mob){ if(m.wind>0){m.wind-=dt;if(m.wind<0)m.wind=0;} if(m.swing>0){m.swing-=dt;if(m.swing<0)m.swing=0;} if(m.recover>0){m.recover-=dt;if(m.recover<0)m.recover=0;}
         const dx=e.rtx-m.x,dy=e.rty-m.y,d=Math.hypot(dx,dy)||1; if(d>0.9){ m.x+=dx/d*m.spd*dt; m.y+=dy/d*m.spd*dt; m.dir=dx<0?-1:1; m.ph+=dt*8; } else m.dir=dx<0?-1:1; }
       e.dmg=Math.min(0.82,e.dmg+dt*0.20);
-      if(Math.random()<dt*4.5) addDebris(e.rtx+(Math.random()-0.5),e.rty+(Math.random()-0.5),2+((Math.random()*3)|0),arson);
+      if(Math.random()<dt*5.5) addDebris(e.rtx+(Math.random()-0.5),e.rty+(Math.random()-0.5),2+((Math.random()*3)|0),arson);
       if(arson&&c){ c.burn=Math.min(4,1+e.st*1.3);          // fire visibly spreads up the walls
-        if(Math.random()<dt*2.2) addDebris(e.rtx+(Math.random()-0.5)*1.3,e.rty+(Math.random()-0.5)*1.3,1,true);   // rising embers, separate cadence from collapse debris
+        if(Math.random()<dt*3.6) addDebris(e.rtx+(Math.random()-0.5)*1.3,e.rty+(Math.random()-0.5)*1.3,1+((Math.random()*2)|0),true);   // rising embers, denser cadence than collapse debris
+        if(Math.random()<dt*1.8) addStain(e.rtx+(Math.random()-0.5)*0.7,e.rty+(Math.random()-0.5)*0.7,0.18+Math.random()*0.12);          // soot scorch creeping outward as the fire takes hold
         if((e.lastScatter===undefined||e.st-e.lastScatter>1.1)&&typeof scatterWitnesses==='function'){ e.lastScatter=e.st; scatterWitnesses(e.rtx,e.rty); } }  // fire keeps pushing the crowd back, not just the initial breach
       if(Math.random()<dt*1.4){ const m=e.mob[(Math.random()*e.mob.length)|0]; if(m&&!m.wind&&!m.swing){m.swing=0.4;m.swingMax=0.4;m.swingType='chop';m.hitFired=true;}
         addSpray(e.rtx+(Math.random()-0.5),e.rty+(Math.random()-0.5),5,0.8); }
@@ -3340,13 +3364,15 @@ function updateRaid(e,dt,near){ e.st+=dt; const arson=e.raidAction==='arson'; co
       break;
     case 'collapse':                                      // ~2.0s — staged cave-in + bodies in the rubble
       e.dmg=Math.min(1,e.dmg+dt*0.5);
-      if(e.lastSt===undefined||e.lastSt>e.st){ addDebris(e.rtx,e.rty,14+((Math.random()*8)|0),arson); if(arson&&c){c.burn=6;disasterT=Math.max(disasterT,7);} }
+      if(e.lastSt===undefined||e.lastSt>e.st){ addDebris(e.rtx,e.rty,18+((Math.random()*10)|0),arson); if(arson&&c){c.burn=6;disasterT=Math.max(disasterT,7);}
+        addScar(e.rtx,e.rty,arson?0.55:0.45,arson?4:3); }                                     // the structural groan — a single heavy burst the instant it gives way, plus a wider scar than the slow burn left behind
       e.lastSt=e.st;
-      if(Math.random()<dt*5) addDebris(e.rtx+(Math.random()-0.5)*1.4,e.rty+(Math.random()-0.5)*1.4,1+((Math.random()*2)|0),arson);
+      if(Math.random()<dt*5.5) addDebris(e.rtx+(Math.random()-0.5)*1.4,e.rty+(Math.random()-0.5)*1.4,1+((Math.random()*2)|0),arson);
+      if(arson&&Math.random()<dt*3) addDebris(e.rtx+(Math.random()-0.5)*1.6,e.rty+(Math.random()-0.5)*1.6,1,true);   // embers keep lofting out of the rubble as it settles
       if(e.st>2.0){ e.state='aftermath'; e.st=0; }
       break;
     case 'aftermath':                                     // ~3s — smoke, embers, the warband melts away
-      if(arson&&c&&Math.random()<dt*2) addDebris(e.rtx+(Math.random()-0.5),e.rty+(Math.random()-0.5),1,true);
+      if(arson&&c&&Math.random()<dt*3.2) addDebris(e.rtx+(Math.random()-0.5),e.rty+(Math.random()-0.5),1,true);
       if(e.st>3.0) e.state='disperse';
       break;
     case 'disperse':
@@ -3613,10 +3639,12 @@ function drawRonin(g,cx,cy,z,a,dir){ dir=dir||1; const ph=a.ph||0, sw=Math.sin(p
   /* ---- weight shift / footwork: the WHOLE body leans back on the windup, then drives forward
      into the cut — real stance mechanics, not just an arm swinging in place. ---- */
   let lunge=0, leanAng=0;
-  if(a.wind>0){ const p=1-(a.wind/(a.windMax||0.2)); lunge=-1.3*p*dir; leanAng=-0.10*dir*p; }
+  if(a.dodgeT>0){ const p=a.dodgeT/0.24; lunge+=(a.dodgeDX||1)*1.6*p; leanAng+=0.08*Math.sign(a.dodgeDX||1)*p; }   // snapping out of a cut's path
+  if(a.blockT>0){ leanAng+=-0.06*dir; }                                                                          // braced low behind the blade
+  if(a.wind>0){ const p=1-(a.wind/(a.windMax||0.2)); lunge+=-1.3*p*dir; leanAng+=-0.10*dir*p; }
   else if(a.swing>0){ const p=1-(a.swing/(a.swingMax||0.4));
     const Ltab={chop:1.7,diag:2.0,sweep:1.4,thrust:3.6}; const L=Ltab[a.swingType]||1.7;
-    const fp=Math.sin(Math.min(1,p*1.25)*Math.PI); lunge=L*fp*dir; leanAng=0.12*dir*fp; }
+    const fp=Math.sin(Math.min(1,p*1.25)*Math.PI); lunge+=L*fp*dir; leanAng+=0.12*dir*fp; }
   g.save(); g.translate(cx+lunge*z,cy); g.rotate(leanAng); cx=0; cy=0;
   g.fillStyle='#211b17'; g.fillRect(cx+(-1.7+sw*0.8)*z,cy+1.4*z,1.4*z,1.5*z); g.fillRect(cx+(0.3-sw*0.8)*z,cy+1.4*z,1.4*z,1.5*z);     // feet
   g.fillStyle=shade(robe,-18); g.beginPath(); g.moveTo(cx-2.6*z,cy+1.6*z);g.lineTo(cx+2.6*z,cy+1.6*z);g.lineTo(cx+1.9*z,cy-3*z-bob);g.lineTo(cx-1.9*z,cy-3*z-bob);g.closePath();g.fill();   // tattered hakama
@@ -3713,9 +3741,19 @@ function drawSpray(g,cx,cy,z,p){ const k=Math.max(0,Math.min(1,(p.max-p.life)/0.
   g.beginPath();g.moveTo(0,0);g.lineTo(-p.vx*0.9*z,-p.vy*0.9*z);g.stroke();
   g.fillStyle='rgba(150,14,16,'+(0.9*k)+')'; g.beginPath();g.arc(0,0,p.r*z,0,7);g.fill(); g.restore(); }
 
+/* ---- bright white-hot steel-on-steel/staff spark burst — a parried blow, not a landed one ---- */
+function drawClashSpark(g,cx,cy,z,p){ const k=Math.max(0,1-p.life/p.max);
+  g.save(); g.translate(cx,cy-p.h*z); g.globalCompositeOperation='lighter';
+  g.strokeStyle='rgba(255,244,210,'+(0.85*k)+')'; g.lineWidth=0.5*z;
+  g.beginPath();g.moveTo(0,0);g.lineTo(-p.vx*0.6*z,-p.vy*0.6*z);g.stroke();
+  g.fillStyle='rgba(255,250,225,'+k+')'; g.beginPath();g.arc(0,0,0.7*z*k,0,7);g.fill();
+  g.restore(); }
+
 /* ---- damage overlay painted over a still-standing raided building: blood down the eaves,
    structural cracks, a collapse dust-shroud, and extra black smoke for arson ---- */
 function drawRaidDamage(g,cx,cy,z,e){ const d=e.dmg||0; if(d<0.02)return; const arson=e.raidAction==='arson';
+  if(e.state==='collapse'){ const cf=Math.min(1,e.st/1.4), shk=Math.max(0,1-cf*2.4);   // sharp shudder right as the structure gives way, settling fast
+    cx+=Math.sin((e.st||0)*47)*shk*1.6*z; cy+=Math.cos((e.st||0)*53)*shk*0.9*z; }
   const hw=TW/2*z, top=cy-22*z;
   if(!arson){                                                                                // blood streaking down the walls (pillage)
     g.save(); g.globalCompositeOperation='multiply'; g.globalAlpha=Math.min(1,d*1.5);
@@ -3743,6 +3781,10 @@ function drawRaidDamage(g,cx,cy,z,e){ const d=e.dmg||0; if(d<0.02)return; const 
       const flick=Math.sin(tt*10+i*2.3)*1.2*z, h=(5+inten*9+(i%2?2:0))*z;
       flameTongue(g,cx+ox+flick,top+3*z,(1.4+inten*1.4)*z,h*0.6,'rgba(255,120,20,0.6)');
       flameTongue(g,cx+ox+flick*0.6,top+3*z,(0.9+inten*0.8)*z,h*0.4,'rgba(255,210,80,0.7)'); }
+    if(e.state==='destruct'||e.state==='collapse'){ const pulse=0.7+0.3*Math.sin(tt*9);    // glowing ember-bed at the structure's base, brightest once it's down
+      const eg=g.createRadialGradient(cx,cy+1*z,0,cx,cy+1*z,hw*1.1*pulse);
+      eg.addColorStop(0,'rgba(255,150,40,'+(0.5*inten*pulse)+')'); eg.addColorStop(1,'rgba(180,40,10,0)');
+      g.fillStyle=eg; g.beginPath();g.ellipse(cx,cy+1*z,hw*1.1,hw*0.55,0,0,7);g.fill(); }
     g.restore();
     g.save(); g.globalAlpha=Math.min(0.65,d*0.55); g.fillStyle='rgba(22,18,16,0.55)';        // thicker, more varied black smoke as the fire climbs
     for(let i=0;i<6;i++){ const yy=top-(8+i*7)*z-((tt*7+i*1.6)%9)*z, xx=cx+Math.sin(tt*1.7+i*2.1)*9*z, rr=(4+i*2.1+inten*3)*z;
@@ -3754,15 +3796,18 @@ function drawDefender(g,cx,cy,z,d){
   if(d.state==='idle'){ const sh=Math.sin((fx||0)*0.006+d.seed)*0.5*z;                  // a fearful shiver, standing its ground
     shadowEllipse(g,cx,cy,2.6,z);
     let lunge=0, leanAng=0, dir=d.dir||1;
+    if(d.dodgeT>0){ const p=d.dodgeT/0.26; lunge+=(d.dodgeDX||1)*1.4*p; leanAng+=0.07*Math.sign(d.dodgeDX||1)*p; }
+    if(d.blockT>0){ leanAng+=-0.05*dir; }
     if(d.guard){                                                                        // armed retainer — same stance mechanics as a ronin's cut
-      if(d.wind>0){ const p=1-(d.wind/(d.windMax||0.2)); lunge=-1.1*p*dir; leanAng=-0.08*dir*p; }
+      if(d.wind>0){ const p=1-(d.wind/(d.windMax||0.2)); lunge+=-1.1*p*dir; leanAng+=-0.08*dir*p; }
       else if(d.swing>0){ const p=1-(d.swing/(d.swingMax||0.4));
         const Ltab={chop:1.4,diag:1.7,thrust:3.0}; const L=Ltab[d.swingType]||1.4;
-        const fp=Math.sin(Math.min(1,p*1.25)*Math.PI); lunge=L*fp*dir; leanAng=0.10*dir*fp; }
+        const fp=Math.sin(Math.min(1,p*1.25)*Math.PI); lunge+=L*fp*dir; leanAng+=0.10*dir*fp; }
     }
     g.save(); g.translate(cx+sh+lunge*z,cy); g.rotate(leanAng);
     drawPerson(g,0,0,z,d.kit,d.dir,1);
     if(d.guard) drawGuardWeapon(g,0,0,z,d,dir);
+    if(d.blockT>0) drawBlockBrace(g,0,0,z,dir);
     g.restore(); return; }
   if(d.state==='struck'){ const p=Math.min(1,d.t/0.4), fall=p*p;                        // struck → staggers → topples
     shadowEllipse(g,cx,cy,2.6,z);
@@ -3813,6 +3858,13 @@ function drawGuardWeapon(g,cx,cy,z,d,dir){
   }
 }
 
+/* ---- unarmed defender bracing an incoming cut with a raised forearm — only shown for
+   the brief blockT window; armed guards block with drawGuardWeapon's own swing instead ---- */
+function drawBlockBrace(g,cx,cy,z,dir){
+  g.save(); g.strokeStyle='#caa57a'; g.lineWidth=1.1*z; g.lineCap='round';
+  g.beginPath(); g.moveTo(cx+(0.6*dir)*z,cy-5.4*z); g.lineTo(cx+(2.6*dir)*z,cy-7.6*z); g.stroke();
+  g.restore(); }
+
 function drawViolenceFX(ctx,z){
   // NOTE: ground blood stains are now drawn in the pre-pass above (with litter), so agents
   // standing on a stain are correctly painted on top of it instead of it floating over them.
@@ -3824,6 +3876,7 @@ function drawViolenceFX(ctx,z){
   for(const e of encounters){ if(e.raid&&e.dmg>0){ const[cx,cy]=s2(e.rtx,e.rty); if(cx>-140&&cx<VW+140&&cy>-180&&cy<VH+140) drawRaidDamage(ctx,cx,cy,z,e); } }
   for(const d of debris){ const[cx,cy]=s2(d.x,d.y); if(cx<-90||cx>VW+90||cy<-90||cy>VH+90)continue; drawDebris(ctx,cx,cy,z,d); }
   for(const p of sprays){ const[cx,cy]=s2(p.x,p.y); if(cx<-90||cx>VW+90||cy<-90||cy>VH+90)continue; drawSpray(ctx,cx,cy,z,p); }
+  for(const p of clashSparks){ const[cx,cy]=s2(p.x,p.y); if(cx<-90||cx>VW+90||cy<-90||cy>VH+90)continue; drawClashSpark(ctx,cx,cy,z,p); }
   for(const e of encounters){ if(e.state==='approach'||e.state==='chase'){ const v=e.vic, vx=v.wx!=null?v.wx:v.x, vy=v.wy!=null?v.wy:v.y; const[cx,cy]=s2(vx,vy);
     ctx.save(); ctx.globalAlpha=0.85; ctx.fillStyle='#b3261e'; ctx.font='700 '+Math.max(8,(8*z)|0)+'px serif'; ctx.textAlign='center'; ctx.fillText('!',cx,cy-15*z); ctx.restore(); } } }
 /* ========================== END RONIN STREET VIOLENCE ========================== */
@@ -4224,24 +4277,24 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
 
   /* ---------- helper registry ---------- */
   var HELPERS = {
-    myo:{ name:'Myo', kanji:'猫', tagline:'A purple cat-spirit — sly, watchful, loyal to whoever feeds the island.',
+    myo:{ name:'Myo', kanji:'猫', tagline:'A purple cat-spirit — sly, theatrical, half in love with her own masks and mirrors.',
       img:IMG.myo, accent:'#9945ff',
       lids:[[25,30,26,14],[59,32,24,12]], skin:['#fbeede','#f0ddc7'], lash:'#3a2f3a',
       egg:{shell:'#efe9f5', dot:'#b98cff'},
       moods:['serious','teasing','ominous','confident'],
-      hello:'Nyaa~ I\'m <b>Myo</b>. 🐾 Quick and simple: every building you raise earns you SOL, just for standing there. Keep it fed, keep it whole. Build first — the rest, I\'ll teach you as we go.' },
-    borg:{ name:'Borg', kanji:'機', tagline:'A quiet construct of clean lines and colder logic — precise, watchful, almost human.',
+      hello:'Nyaa~ I\'m <b>Myo</b>. 🐾 Every building you raise is a little stage, and the SOL it earns is just standing there for the lights. Keep it fed, keep it whole — a torn set ruins the show. Build first. I\'ll teach you the rest as we go, darling.' },
+    borg:{ name:'Borg', kanji:'機', tagline:'A quiet construct of clean lines and colder logic — emotion noted, then set aside as irrelevant.',
       img:IMG.borg, accent:'#5ad1ff',
       lids:[[25,27,23,15],[59,27,23,15]], skin:['#dfe7ea','#c7d2d6'], lash:'#3a4448',
       egg:{shell:'#e3eef2', dot:'#5ad1ff'},
       moods:['precise','formal','curious','fond'],
-      hello:'Systems online. I am <b>Borg</b>. 🥚 Lesson one: standing structures generate SOL automatically. Build, and income follows — no further input required. I will cover the remaining mechanisms as they become relevant.' },
-    suiko:{ name:'Suiko-bun', kanji:'河童', tagline:'A small kappa, damp and unimpressed — keeps to the canals, answers when it must.',
+      hello:'Systems online. I am <b>Borg</b>. 🥚 Lesson one, logically: a standing structure generates SOL without further input. This is illogical to ignore. Build, and income follows. I will cover the remaining mechanisms as they become relevant — emotion is not required for this part.' },
+    suiko:{ name:'Suiko-bun', kanji:'河童', tagline:'A small kappa, damp and unimpressed — minds the silence between things as much as the things themselves.',
       img:IMG.suiko, accent:'#7a9c3f',
       lids:[[24,29,23,15],[57,28,24,15]], skin:['#cdd98a','#b7c46f'], lash:'#4a5a2c',
       egg:{shell:'#e4e9cf', dot:'#7a9c3f'},
       moods:['grumpy','dry','reluctant','wary'],
-      hello:'…Fine. I\'m <b>Suiko-bun</b>. 🥚 First thing, since you\'ll forget otherwise: buildings earn SOL just by standing. Put one up, it pays you. Don\'t make me repeat myself.' }
+      hello:'…Fine. I\'m <b>Suiko-bun</b>. 🥚 Here is the thing, said once: buildings earn SOL just by standing. Put one up, it pays you. The silence after that — what you do with it — matters more than I\'ll bother explaining twice.' }
   };
   var ORDER = ['myo','borg','suiko'];
 
@@ -4565,66 +4618,100 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
   /* ---------- summon (tap guide) ---------- */
   // each entry: { text, myo: mood-for-Myo, borg: mood-for-Borg, suiko: mood-for-Suiko-bun }
   var lore=[
-    { text:'Keep <b>FIRE</b> & <b>POLICE</b> coverage up — safe wards grow richer, and richer wards stay beautiful.',
-      myo:'serious', borg:'formal', suiko:'dry' },
-    { text:'Every $SORU you spend is <i>burned</i> into Kami ⛩ — nothing wasted, all of it ages the whole island.',
-      myo:'confident', borg:'precise', suiko:'grumpy' },
-    { text:'The brighter the Heian golden age shines… the harder the fall to Sengoku. Enjoy the gold while it lasts. ✨',
-      myo:'ominous', borg:'curious', suiko:'wary' },
-    { text:'Yokai like us drift through your streets at dusk. Mostly harmless. <i>Mostly.</i> 👁',
-      myo:'teasing', borg:'curious', suiko:'reluctant' },
-    { text:'Tap <b>⛶</b> to refit the view, or <b>✋ MOVE</b> to shove a building somewhere new.',
-      myo:'serious', borg:'formal', suiko:'dry' },
-    { text:'Watch the <span class="ko">land value</span> overlay — green thrives, red suffers. Poverty shows in the streets.',
-      myo:'serious', borg:'precise', suiko:'grumpy' }
+    { myo:{ text:'Keep <b>FIRE</b> & <b>POLICE</b> up, darling — a safe ward is simply a more flattering frame. Richer wards photograph beautifully.', mood:'confident' },
+      borg:{ text:'Maintain <b>FIRE</b> and <b>POLICE</b> coverage. Safety correlates with prosperity. Prosperity correlates with beauty. The chain is not optional.', mood:'precise' },
+      suiko:{ text:'Fire and police. Keep them up. Skip it, the ward rots. I won\'t say it twice.', mood:'dry' } },
+    { myo:{ text:'Every <i>$SORU</i> you spend is burned into Kami ⛩ — nothing wasted, my dear. Even ash can be composed into something gorgeous.', mood:'confident' },
+      borg:{ text:'Each <i>$SORU</i> spent is burned into Kami ⛩. Energy is not destroyed, only converted. The whole island ages on what you feed it. Logical.', mood:'precise' },
+      suiko:{ text:'Spend $SORU, it burns to Kami. The island ages on it. Nothing comes free. Sit with that.', mood:'grumpy' } },
+    { myo:{ text:'The brighter the Heian gold shines… the more theatrical the fall to Sengoku will be. I do so love a third act. ✨', mood:'ominous' },
+      borg:{ text:'Note the pattern: Heian\'s peak and Sengoku\'s collapse are correlated, not coincidental. Enjoy the gold. It is, statistically, temporary.', mood:'curious' },
+      suiko:{ text:'Gold now. Ash later. That\'s the deal. Don\'t act surprised when it comes.', mood:'wary' } },
+    { myo:{ text:'Yokai like us drift through your streets at dusk, posing for nobody and everybody. Mostly harmless. <i>Mostly.</i> 👁', mood:'teasing' },
+      borg:{ text:'Yokai entities are present in your streets at dusk. Threat classification: mostly harmless. The qualifier is doing some work there. 👁', mood:'curious' },
+      suiko:{ text:'We\'re around at dusk. Watching. Mostly we don\'t do anything. Mostly.', mood:'reluctant' } },
+    { myo:{ text:'Tap <b>⛶</b> to reframe the view, or <b>✋ MOVE</b> to rearrange a piece that\'s simply standing wrong.', mood:'serious' },
+      borg:{ text:'<b>⛶</b> resets the viewport. <b>✋ MOVE</b> relocates a placed structure without demolition. Use either as needed.', mood:'formal' },
+      suiko:{ text:'⛶ resets the view. ✋ MOVE picks a building up, sets it down elsewhere. That\'s all those do.', mood:'dry' } },
+    { myo:{ text:'Watch the <span class="ko">land value</span> overlay, love — green is a portrait, red is a confession. Poverty always shows in the streets.', mood:'serious' },
+      borg:{ text:'The <span class="ko">land value</span> overlay quantifies ward health. Green: thriving. Red: suffering. Poverty manifests visibly. This is by design, not accident.', mood:'precise' },
+      suiko:{ text:'Land value. Green good, red bad. Poverty shows up in the streets whether you look or not. Look anyway.', mood:'grumpy' } }
   ];
   var mythLore=[
-    { text:'The <b>kitsune</b> slip through quiet streets at night, trailing little sparks of luck wherever land value is decent. Some say a fox\'s tail glows brighter the more lies it has told.',
-      myo:'teasing', borg:'curious', suiko:'dry' },
-    { text:'A <b>tanuki</b> stumbles drunk between the trees, shapeshifting badly — half raccoon-dog, half whatever he was trying to look like. Harmless. Usually generous, too.',
-      myo:'teasing', borg:'fond', suiko:'grumpy' },
-    { text:'When the whole island prospers, a <b>ryū</b> coils high above the rooftops. Dragons don\'t bless prosperity — they\'re drawn to it, the way moths find a flame.',
-      myo:'confident', borg:'precise', suiko:'wary' },
-    { text:'A <b>tennyo</b> — a celestial dancer — only appears over the most beautiful wards. Catch her robe while she dances and she\'s yours forever. So the old stories say. I\'ve never tried. 👀',
-      myo:'ominous', borg:'curious', suiko:'reluctant' },
-    { text:'<b>Kappa</b> lurk where the shoreline meets the wards — small, scaled, and possessive of the water-dish on their heads. Spill it, and they lose their power entirely.',
-      myo:'teasing', borg:'formal', suiko:'grumpy' },
-    { text:'Where despair and fire gather, <b>oni</b> begin to circle. They don\'t cause the suffering. They just… enjoy it.',
-      myo:'ominous', borg:'precise', suiko:'wary' },
-    { text:'In snowfall, a <b>yuki-onna</b> drifts pale between the rooftops. Beautiful from a distance. Best left at a distance.',
-      myo:'ominous', borg:'curious', suiko:'reluctant' },
-    { text:'When Sengoku\'s ashes pile high enough, a <b>gashadokuro</b> rises — a skeleton built from a thousand unburied dead, taller than any wonder you\'ll ever build.',
-      myo:'ominous', borg:'formal', suiko:'wary' }
+    { myo:{ text:'The <b>kitsune</b> slip through quiet streets at night, leaving little sparks wherever land value flatters them. A fox\'s tail glows brighter the more lies it\'s told — I find that terribly relatable.', mood:'teasing' },
+      borg:{ text:'<b>Kitsune</b> are observed near streets with adequate land value at night. Folklore claims their tails glow proportionally to lies told. Unverifiable. Noted anyway.', mood:'curious' },
+      suiko:{ text:'Kitsune. Night streets, decent land value, little sparks. Foxes lie a lot, apparently. Not my problem.', mood:'dry' } },
+    { myo:{ text:'A <b>tanuki</b> stumbles drunk between the trees, shapeshifting badly — half raccoon-dog, half whatever pose he was attempting. Charming failure of composition.', mood:'teasing' },
+      borg:{ text:'<b>Tanuki</b> exhibit poor shapeshifting fidelity — half raccoon-dog, half intended form. Classification: harmless. Generosity observed as a secondary trait.', mood:'fond' },
+      suiko:{ text:'Tanuki. Drunk, bad at shapeshifting, gives you stuff sometimes. Annoying. Harmless annoying.', mood:'grumpy' } },
+    { myo:{ text:'When the island prospers, a <b>ryū</b> coils above the rooftops like a signature on a finished canvas. Dragons don\'t bless prosperity — they\'re simply drawn to anything that glows.', mood:'confident' },
+      borg:{ text:'A <b>ryū</b> appears above prospering islands. Causality is misattributed: dragons do not cause prosperity, they are attracted to it. Correlation, not blessing.', mood:'precise' },
+      suiko:{ text:'Island does well, a dragon shows up to look at it. Doesn\'t help. Doesn\'t hurt. Just watches.', mood:'wary' } },
+    { myo:{ text:'A <b>tennyo</b>, a celestial dancer, appears only over the most beautiful wards — catch her robe mid-performance and she\'s yours forever. So the old stories claim. I\'ve never reached for it. Some masks should stay on the wall. 👀', mood:'ominous' },
+      borg:{ text:'<b>Tennyo</b> sightings correlate with high-beauty wards. Folklore states capturing her robe binds her permanently. I have not tested this. The ethics seem questionable.', mood:'curious' },
+      suiko:{ text:'Tennyo shows up over pretty wards. Grab her robe, she\'s stuck with you forever, they say. Don\'t. Just don\'t.', mood:'reluctant' } },
+    { myo:{ text:'<b>Kappa</b> linger where shoreline meets ward, small and scaled and fiercely protective of the water-dish atop their heads. Spill it and they lose everything — even I find that a touch too on the nose.', mood:'teasing' },
+      borg:{ text:'<b>Kappa</b> occupy shoreline-adjacent tiles. Their power source is a water-filled cranial dish. Spillage results in total power loss. A single point of failure. Inelegant design.', mood:'formal' },
+      suiko:{ text:'Kappa keep to the water. Don\'t spill what\'s on their heads. We take that one seriously. I take that one seriously.', mood:'grumpy' } },
+    { myo:{ text:'Where despair and fire gather, <b>oni</b> begin to circle. They don\'t cause the suffering — they simply attend, the way an audience gathers for tragedy.', mood:'ominous' },
+      borg:{ text:'<b>Oni</b> are observed circling sites of concentrated suffering and fire. They are not causative agents. They are, functionally, spectators.', mood:'precise' },
+      suiko:{ text:'Oni show up where things are already bad. They don\'t make it worse. They just watch it happen. That\'s its own kind of bad.', mood:'wary' } },
+    { myo:{ text:'In snowfall, a <b>yuki-onna</b> drifts pale between the rooftops — beautiful exactly as far as the distance allows, and not one step closer.', mood:'ominous' },
+      borg:{ text:'<b>Yuki-onna</b> manifest during snowfall. Recommended viewing distance: nonzero. Aesthetic value decreases sharply at close range. I have not tested this either.', mood:'curious' },
+      suiko:{ text:'Yuki-onna, in the snow. Pretty from far away. Stay far away. That\'s the whole lesson.', mood:'reluctant' } },
+    { myo:{ text:'When Sengoku\'s ashes pile high enough, a <b>gashadokuro</b> rises — a skeleton composed of a thousand unburied dead, taller than any wonder you\'ll ever build. A monument no one asked for.', mood:'ominous' },
+      borg:{ text:'Sufficient unburied dead during Sengoku produces a <b>gashadokuro</b> — a composite skeletal entity exceeding the scale of any constructed wonder. The threshold is the input. The monster is the output.', mood:'formal' },
+      suiko:{ text:'Enough dead pile up, you get a gashadokuro. Bigger than anything you built on purpose. That should tell you something.', mood:'wary' } }
   ];
   var skyLore=[
-    { text:'Look up long enough and the void isn\'t empty — it remembers shapes. The old stargazers traced a <b>heron in flight</b> across the dark, wings spread over the whole island.',
-      myo:'serious', borg:'curious', suiko:'dry' },
-    { text:'There\'s a faint cluster sailors called the <b>Boat of Ages</b> — seven dim stars in a line, said to carry the souls of each era forward to the next.',
-      myo:'serious', borg:'formal', suiko:'reluctant' },
-    { text:'The brightest point above the void doesn\'t move all year. Fishermen call it the <b>Still Lantern</b> and steer by it when everything else drifts.',
-      myo:'confident', borg:'precise', suiko:'dry' },
-    { text:'During Heian\'s golden nights, a faint band crosses the sky they called the <b>River of Quiet Names</b> — every soul who ever lived peacefully on the island, they say, written there in light.',
-      myo:'confident', borg:'fond', suiko:'reluctant' },
-    { text:'In Sengoku, the same stars look colder somehow. Some claim war doesn\'t change the sky — it changes what you\'re able to see in it.',
-      myo:'ominous', borg:'curious', suiko:'wary' }
+    { myo:{ text:'Look up long enough and the void isn\'t empty — it remembers shapes. The old stargazers traced a <b>heron in flight</b> across the dark, wings spread the width of the whole island. A composition worth stealing.', mood:'serious' },
+      borg:{ text:'The void background contains fixed point-star patterns. One configuration resembles a <b>heron in flight</b>, spanning the visible sky. Pattern recognition, not coincidence.', mood:'curious' },
+      suiko:{ text:'There\'s a heron shape in the stars, if you look. Old stargazers named it that. Fine, I suppose.', mood:'dry' } },
+    { myo:{ text:'A faint cluster sailors named the <b>Boat of Ages</b> — seven dim stars in a line, said to carry every era\'s souls forward to the next. A ferry that never stops running.', mood:'serious' },
+      borg:{ text:'The <b>Boat of Ages</b> is a seven-star linear formation. Maritime folklore assigns it the function of transporting souls between eras. A persistent and specific claim.', mood:'formal' },
+      suiko:{ text:'Seven stars in a line, sailors call it the Boat of Ages. Supposedly carries souls between eras. Supposedly.', mood:'reluctant' } },
+    { myo:{ text:'The brightest point above the void never moves all year. Fishermen call it the <b>Still Lantern</b> and steer by it when everything else drifts. Constancy, the rarest pigment.', mood:'confident' },
+      borg:{ text:'One star, the <b>Still Lantern</b>, exhibits zero positional drift across the observed year. Used reliably for navigation. The only fixed reference point in an otherwise dynamic sky.', mood:'precise' },
+      suiko:{ text:'One star doesn\'t move all year. Fishermen call it the Still Lantern, steer by it. Makes sense. Most things move too much.', mood:'dry' } },
+    { myo:{ text:'During Heian\'s golden nights, a faint band crosses the sky they called the <b>River of Quiet Names</b> — every soul who lived peacefully here, they say, written in light. A gallery with no walls.', mood:'confident' },
+      borg:{ text:'During the Heian era specifically, a band of light appears, named the <b>River of Quiet Names</b>. Folklore attributes it to peaceful souls. The era-specificity is the interesting part.', mood:'fond' },
+      suiko:{ text:'In Heian, a band of light shows up — River of Quiet Names, they call it. Supposed to be peaceful souls. Nice while it lasts.', mood:'reluctant' } },
+    { myo:{ text:'In Sengoku, the same stars look colder somehow. War doesn\'t change the sky — it changes what you\'re finally able to see in it.', mood:'ominous' },
+      borg:{ text:'Identical stars are perceived as colder during Sengoku. The sky is unchanged; the observer\'s state is not. A perception shift, not an astronomical one.', mood:'curious' },
+      suiko:{ text:'Same stars in Sengoku. Look colder. Sky didn\'t change. You did. That\'s usually how it goes.', mood:'wary' } }
   ];
   var loreI=0, mythI=0, skyI=0;
-  function moodFor(entry){ return entry[cur] || null; }
+  function entryFor(entry){ return entry[cur] || null; }
   function anyFire(){ try{ for(var y=0;y<grid.length;y++)for(var x=0;x<grid[y].length;x++) if(grid[y][x].burn) return true; }catch(e){} return false; }
+  var FIRE_ALERT = {
+    myo:{ text:'Fire on the island! 🔥 Not the dramatic kind I enjoy — tap <b>💧 DOUSE</b>, then strike the flames before they ruin the whole composition.', mood:'ominous' },
+    borg:{ text:'Active fire detected. 🔥 Tap <b>💧 DOUSE</b>, then target the flames directly. Spread is exponential. Act now, not after assessing the aesthetics.', mood:'precise' },
+    suiko:{ text:'Fire. Right now. Tap DOUSE, hit the flames. Talk later.', mood:'wary' }
+  };
+  var REACTIVATE = {
+    myo:{ text:'I\'m back, darling. 👋 Tap me whenever the stage needs setting.' },
+    borg:{ text:'Systems re-engaged. 👋 I am available when required.' },
+    suiko:{ text:'…Back. Tap me if you need something. Try not to need much.' }
+  };
+  var BEGIN_HINT = {
+    myo:{ text:'Let\'s begin, shall we? Choose a structure from the bar below and place it like the first brushstroke.' },
+    borg:{ text:'Initial action required: select a structure from the bar below, then place it on the island.' },
+    suiko:{ text:'Start with that bar down there. Pick something, put it down. Not complicated.' }
+  };
   function summon(){ if(!enabled||!cur||egg.classList.contains('show')) return;
-    if(anyFire()){ say('Fire on the island! 🔥 Tap <b>💧 DOUSE</b> below, then tap the flames before they spread.',{point:'#douseBtn',mood:'nervous'}); return; }
-    if(!isSeen('placed')){ say('Let\'s begin! Pick a structure from the bar below and tap the island to place it.',{point:'#builds'}); return; }
-    var pool=loreI%3, entry;
+    if(anyFire()){ var fa=FIRE_ALERT[cur]; say(fa.text,{point:'#douseBtn',mood:fa.mood}); return; }
+    if(!isSeen('placed')){ var bh=BEGIN_HINT[cur]; say(bh.text,{point:'#builds'}); return; }
+    var pool=loreI%3, entry, v;
     if(pool===0){ entry=lore[Math.floor(loreI/3)%lore.length]; }
     else if(pool===1){ entry=mythLore[mythI%mythLore.length]; mythI++; }
     else{ entry=skyLore[skyI%skyLore.length]; skyI++; }
-    say(entry.text,{mood:moodFor(entry)}); loreI++; }
+    v=entryFor(entry); say(v.text,{mood:v.mood}); loreI++; }
   stack.addEventListener('click',summon);
 
   /* ---------- on/off ---------- */
   function applyVis(){ wrap.classList.toggle('off',!enabled||!cur); tog.classList.toggle('off',!enabled); }
   function setEnabled(on){ enabled=on; lset('yk_on',on?'1':'0'); applyVis();
-    if(on){ if(!cur) openModal(true); else say('I\'m back! Tap me whenever you need a hand. 👋'); }
+    if(on){ if(!cur) openModal(true); else say(REACTIVATE[cur].text); }
     else { bubble.classList.remove('show'); clearTimeout(hideT); } }
   tog.addEventListener('click',function(){ setEnabled(!enabled); });
 
@@ -4634,28 +4721,70 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
   if(enabled && !cur) setTimeout(function(){ openModal(true); },700);
 
   /* ============================================================
-     TUTORIAL HOOKS (helper-agnostic; fire once each)
+     TUTORIAL HOOKS — voiced per-guide
      ============================================================ */
+  var SELBUILD_TXT = {
+    myo:'Good eye. 🎨 Now tap the island to set it down. Every build burns $SORU into Kami ⛩ — the whole island ages on what you spend, like paint drying into something permanent.',
+    borg:'Selection registered. Tap the island to place it. Each build burns $SORU into Kami ⛩, advancing the island\'s age. This is the core mechanism.',
+    suiko:'Picked one. Now tap the island. Burns $SORU into Kami, ages the island. That\'s the whole loop.'
+  };
+  var PLACED_TXT = {
+    myo:'Lovely. 🌸 Buildings you keep standing pay you SOL over time — trade it at the DEX for more $SORU to burn into something even better.',
+    borg:'Placement successful. Standing buildings generate SOL passively. Convert at the DEX into $SORU for further construction. Cycle is self-sustaining.',
+    suiko:'Built. It\'ll pay you SOL while it stands. Swap that for $SORU at the DEX. Keep going.'
+  };
   var builds=document.getElementById('builds');
   if(builds) builds.addEventListener('click',function(e){ var b=e.target.closest('.bbtn'); if(!b||b.classList.contains('lock'))return;
-    once('selbuild','Good pick! Now tap the island to place it. Every build burns $SORU into Kami ⛩ — the whole island ages through what you spend.'); },true);
+    once('selbuild',SELBUILD_TXT[cur]); },true);
 
   if(typeof window.place==='function'){ var _place=window.place;
     window.place=function(){ var built=(typeof S!=='undefined'&&S.tool&&!S.hand&&!S.douse&&!S.demo&&!S.pillage&&!S.arson&&!S.guard);
       var r=_place.apply(this,arguments);
-      if(built) once('placed','Beautiful work. 🌸 Buildings you keep standing pay you SOL over time — swap it at the DEX for more $SORU to burn.');
+      if(built) once('placed',PLACED_TXT[cur]);
       return r; }; }
 
-  function tipBtn(id,key,text,pt){ var el=document.getElementById(id); if(!el)return;
-    el.addEventListener('click',function(){ once(key,text,pt?{point:pt}:undefined); },true); }
-  tipBtn('valBtn','value','This is <span class="ko">land value</span> — the soul of a ward. Green thrives, red suffers. Poverty breeds litter, beggars… and worse.','#valBtn');
-  tipBtn('dexBtn','dex','The DEX swaps the SOL you earn into $SORU. Burning $SORU fuels Kami ⛩ and turns the Ages forward.','#dexBtn');
-  tipBtn('advanceBtn','advance','Ages turn on <i>collective</i> Kami ⛩ — every $SORU burned across the whole island, never one player alone. Push toward the next age!','#advanceBtn');
-  tipBtn('arsonBtn','raid','Ah… the cruel part. 🔥 Torch and sack rival wards. Soru Shiti was never gentle — beauty and ash, always together.','#arsonBtn');
-  tipBtn('pillageBtn','raid','Ah… the cruel part. 🏴 Sack a rival\'s holding for their $SORU. Beauty and brutality are two halves of one island.','#pillageBtn');
-  tipBtn('guardBtn','guard','Hire a ronin retainer to shield one building from the next raid. Even beauty needs a blade at the gate. 🛡','#guardBtn');
-  tipBtn('handBtn','move','✋ MOVE lets you pick a building up and set it down elsewhere — rework your ward without razing it.');
-  tipBtn('demoBtn','raze','⛏ RAZE clears your own works to make room. Rivals\' plots you must take by force (PILLAGE / ARSON).');
+  function tipBtn(id,key,texts,pt){ var el=document.getElementById(id); if(!el)return;
+    el.addEventListener('click',function(){ once(key,texts[cur],pt?{point:pt}:undefined); },true); }
+  tipBtn('valBtn','value',{
+    myo:'This is <span class="ko">land value</span> — the soul of a ward, darling. Green is a flattering light, red is an unflinching one. Poverty breeds litter, beggars… and worse, painted plainly.',
+    borg:'<span class="ko">Land value</span> quantifies ward condition. Green: thriving. Red: suffering. Low values correlate with litter, displaced persons, and further decline. This is measurable, not metaphorical.',
+    suiko:'Land value. Green good, red bad. Low value means litter, beggars, worse. Don\'t look away from it.'
+  },'#valBtn');
+  tipBtn('dexBtn','dex',{
+    myo:'The DEX swaps the SOL you\'ve earned into $SORU. Burning $SORU feeds Kami ⛩ and turns the Ages forward — alchemy, basically, with extra steps.',
+    borg:'The DEX exchanges SOL for $SORU. Burning $SORU fuels Kami ⛩, which advances the Age counter. A two-step conversion pipeline.',
+    suiko:'DEX trades SOL for $SORU. Burn that, it feeds Kami, moves the Ages along. Use it.'
+  },'#dexBtn');
+  tipBtn('advanceBtn','advance',{
+    myo:'Ages turn on <i>collective</i> Kami ⛩ — every $SORU burned across the whole island, never one player alone. Push toward the next age together, like an ensemble piece.',
+    borg:'Age progression depends on aggregate Kami ⛩ across all players, not individual contribution. A shared threshold. Collaborate accordingly.',
+    suiko:'Ages move on everyone\'s Kami together. Not just yours. Push toward the next one anyway.'
+  },'#advanceBtn');
+  tipBtn('arsonBtn','raid',{
+    myo:'Ah… the cruel part. 🔥 Torch and sack rival wards. Soru Shiti was never gentle — beauty and ash, always sharing the same canvas.',
+    borg:'ARSON destroys rival ward structures. 🔥 This is the conflict subsystem. It is by design, not malfunction. Beauty and destruction coexist in this system.',
+    suiko:'Arson. Burns rival wards. Yeah, it\'s ugly. That\'s the point of it.'
+  },'#arsonBtn');
+  tipBtn('pillageBtn','raid',{
+    myo:'Ah… the cruel part again. 🏴 Sack a rival\'s holding for their $SORU. Beauty and brutality, two halves of the same brushstroke.',
+    borg:'PILLAGE extracts $SORU from a rival holding. 🏴 Resource transfer via conflict. Functionally identical in consequence to ARSON, different mechanism.',
+    suiko:'Pillage. Takes a rival\'s $SORU by force. Same ugliness as arson, different method.'
+  },'#pillageBtn');
+  tipBtn('guardBtn','guard',{
+    myo:'Hire a ronin retainer to shield one building from the next raid. Even the loveliest stage needs a blade at the wings. 🛡',
+    borg:'GUARD assigns a ronin retainer to protect one building from a single future raid. Mitigation, not immunity. 🛡',
+    suiko:'Guard. One ronin, one building, one raid blocked. Doesn\'t last forever. 🛡'
+  });
+  tipBtn('handBtn','move',{
+    myo:'✋ MOVE lets you lift a piece and set it down elsewhere — rework the composition without tearing the canvas.',
+    borg:'✋ MOVE relocates a structure without demolition. Non-destructive repositioning.',
+    suiko:'✋ MOVE picks a building up, puts it somewhere else. No demolition needed.'
+  });
+  tipBtn('demoBtn','raze',{
+    myo:'⛏ RAZE clears your own works to make room for the next idea. Rivals\' plots you must take by force — PILLAGE or ARSON, no other brush for that.',
+    borg:'⛏ RAZE removes your own structures. Rival-owned plots require PILLAGE or ARSON; RAZE has no effect on them. Ownership-gated function.',
+    suiko:'⛏ RAZE clears your own stuff. Rivals\' plots, you need PILLAGE or ARSON. RAZE won\'t touch those.'
+  });
 })();
 
 </script>
