@@ -314,7 +314,7 @@ const CATALOG=[
   {id:'valid',civ:VALID,  nm:'VALIDATOR',cost:80000,era:8, ic:'civ'},  // Wonder
 ];
 const CIVIC_NAME={[TOWN]:'TOWN',[FARM]:'FARM',[MARKET]:'MARKET',[SCHOOL]:'SCHOOL',[HOSP]:'HOSPITAL',[LIB]:'LIBRARY',[PARK]:'PARK',[PLANT]:'POWER',[VALID]:'VALIDATOR',[TEMPLE]:'TEMPLE',[FIRE]:'FIRE STN',[POLICE]:'POLICE'};
-const SVC_R=6, PARK_R=3, FIRE_R=5, POLICE_R=6;
+const SVC_R=6, PARK_R=3, FIRE_R=5, POLICE_R=6, SHRINE_R=7;
 
 /* ===== ECONOMY TUNING (single place to balance) =====
    SOL creator rewards are paid from a shared global pool and split by CURRENT
@@ -583,7 +583,7 @@ function roadAdj(x,y){ for(const[dx,dy]of NEIGH){const nx=x+dx,ny=y+dy; if(inB(n
 function nearRoad(x,y,r){ for(let j=-r;j<=r;j++)for(let i=-r;i<=r;i++){const nx=x+i,ny=y+j; if(inB(nx,ny)&&grid[ny][nx].road&&Math.abs(i)+Math.abs(j)<=r)return true;} return false; }
 
 /* ============================ COVERAGE / LAND VALUE ============================ */
-let healthGrid=null, eduGrid=null, parkGrid=null, valueGrid=null, fireGrid=null, policeGrid=null, crimeGrid=null;
+let healthGrid=null, eduGrid=null, parkGrid=null, valueGrid=null, fireGrid=null, policeGrid=null, crimeGrid=null, shrineGrid=null;
 function stampCircle(g,x,y,r){ for(let j=-r;j<=r;j++)for(let i=-r;i<=r;i++){const nx=x+i,ny=y+j;
   if(inB(nx,ny)&&i*i+j*j<=r*r)g[ny][nx]=1; } }
 function stampFalloff(g,x,y,r,peak){ for(let j=-r;j<=r;j++)for(let i=-r;i<=r;i++){const nx=x+i,ny=y+j,d2=i*i+j*j;
@@ -594,13 +594,15 @@ function rebuildCoverage(){
   parkGrid=Array.from({length:H},()=>new Uint8Array(W));
   fireGrid=Array.from({length:H},()=>new Float32Array(W));     // graded: strong at the station, weaker at the edge
   policeGrid=Array.from({length:H},()=>new Uint8Array(W));
+  shrineGrid=Array.from({length:H},()=>new Uint8Array(W));     // hard boundary: hallowed ground wards or it doesn't, no falloff
   for(let y=0;y<H;y++)for(let x=0;x<W;x++){ const c=grid[y][x]; if(!c.civ||c.burn)continue;
     if(c.civ===HOSP)stampCircle(healthGrid,x,y,SVC_R);
     if(c.civ===SCHOOL)stampCircle(eduGrid,x,y,SVC_R);
     if(c.civ===LIB)stampCircle(eduGrid,x,y,SVC_R+1);
     if(c.civ===FIRE)stampFalloff(fireGrid,x,y,FIRE_R,0.85);
     if(c.civ===POLICE)stampCircle(policeGrid,x,y,POLICE_R);
-    if(c.civ===PARK||c.civ===TEMPLE)stampCircle(parkGrid,x,y,PARK_R); }
+    if(c.civ===PARK||c.civ===TEMPLE)stampCircle(parkGrid,x,y,PARK_R);
+    if(c.civ===TEMPLE)stampCircle(shrineGrid,x,y,SHRINE_R); }
   // crime field — rises with residential density, falls with police, education, parks
   crimeGrid=Array.from({length:H},()=>new Float32Array(W));
   for(let y=0;y<H;y++)for(let x=0;x<W;x++){ const c=grid[y][x]; if(!(c.dev>0))continue;
@@ -1512,6 +1514,23 @@ function drawProps(g,cx,cy,z,st,wallH,hw,night){ if(!st.props)return; const top=
       g.strokeStyle='#4a4a50';g.lineWidth=0.63*z; g.beginPath();g.moveTo(sx-4*z,by);g.lineTo(sx-2.6*z,by-7*z);g.moveTo(sx+4*z,by);g.lineTo(sx+2.6*z,by-7*z);g.moveTo(sx-4*z,by);g.lineTo(sx+2.6*z,by-7*z);g.moveTo(sx+4*z,by);g.lineTo(sx-2.6*z,by-7*z);g.stroke();
       g.fillStyle='#7d8690'; g.beginPath();g.ellipse(sx,by-8*z,4*z,2*z,0,0,7);g.fillRect(sx-4*z,by-8*z,8*z,5*z);g.fill(); g.fillStyle='#5f676f';g.fillRect(sx-4*z,by-4*z,8*z,1.4*z);
       g.fillStyle='#9aa3ad';g.beginPath();g.ellipse(sx,by-8.5*z,4*z,2*z,0,0,7);g.fill(); g.fillStyle='#5a3a2a';g.beginPath();g.moveTo(sx-3*z,by-3*z);g.lineTo(sx+3*z,by-3*z);g.lineTo(sx,by+0.5*z);g.closePath();g.fill(); }
+    else if(p==='goods'){ // scattered market crates/baskets/jars along the open front, world-seeded so they hold still
+      const _u=(cx-cam.x)/z,_v=(cy-cam.y)/z, gWX=Math.round(_u/TW+_v/TH),gWY=Math.round(_v/TH-_u/TW), gseed=Math.abs((gWX*5+gWY*9)|0);
+      const gy=cy+TH*0.42*z;
+      for(let i=0;i<5;i++){ const f=(i-2)/2.2, gx=cx+f*hw*0.75, jb=vhash(gseed,i*3)*1.2*z, kind=(vhash(gseed,i*5+1)*4)|0;
+        if(kind===0){ g.fillStyle='#8a6a3a'; g.fillRect(gx-2.6*z,gy-4*z-jb,5.2*z,4*z); g.fillStyle='#6a4a28';g.fillRect(gx-2.6*z,gy-4*z-jb,5.2*z,1*z); } // crate
+        else if(kind===1){ g.fillStyle='#a0773a'; g.beginPath();g.ellipse(gx,gy-2.2*z-jb,2.8*z,2.3*z,0,0,7);g.fill(); g.strokeStyle='#5a3e1e';g.lineWidth=0.42*z;g.beginPath();g.moveTo(gx-2.6*z,gy-3.2*z-jb);g.lineTo(gx+2.6*z,gy-3.2*z-jb);g.stroke(); } // basket
+        else if(kind===2){ g.fillStyle='#7a8a6a'; g.beginPath();g.ellipse(gx,gy-2.6*z-jb,1.9*z,3*z,0,0,7);g.fill(); g.fillStyle='#5a6a4a';g.fillRect(gx-1.3*z,gy-5.2*z-jb,2.6*z,1*z); } // jar
+        else { g.fillStyle='#caa23a'; g.beginPath();g.ellipse(gx,gy-1.6*z-jb,2.6*z,1.7*z,0,0,7);g.fill(); } } } // produce pile
+    else if(p==='torii_small'){ const sx=cx, by=cy+hw*0.42*(TH/TW); // small freestanding gate in front of the structure (hh derived from hw via tile aspect)
+      g.strokeStyle='#a03020';g.lineWidth=1.4*z; g.beginPath();g.moveTo(sx-5*z,by);g.lineTo(sx-5*z,by-9*z);g.moveTo(sx+5*z,by);g.lineTo(sx+5*z,by-9*z);g.stroke();
+      g.strokeStyle='#a03020';g.lineWidth=2*z; g.beginPath();g.moveTo(sx-6.5*z,by-9*z);g.lineTo(sx+6.5*z,by-9*z);g.stroke();
+      g.strokeStyle='#7a2418';g.lineWidth=1.1*z; g.beginPath();g.moveTo(sx-5.6*z,by-6.8*z);g.lineTo(sx+5.6*z,by-6.8*z);g.stroke(); }
+    else if(p==='scrollstack'){ const sx=cx+hw*0.32, by=top+1*z; // stacked archive document boxes near entrance
+      for(let i=0;i<3;i++){ const bw=6.5*z-i*0.6*z, bh=2.6*z, by2=by-i*bh;
+        g.fillStyle=shade('#caa23a',-6-i*6); g.fillRect(sx-bw/2,by2-bh,bw,bh);
+        g.strokeStyle='#7a5a1e';g.lineWidth=0.35*z; g.strokeRect(sx-bw/2,by2-bh,bw,bh);
+        g.fillStyle='#efe2c4'; g.fillRect(sx-bw*0.18,by2-bh+0.5*z,bw*0.36,1.1*z); } }
   }
 }
 /* ── era-specific building helpers ── */
@@ -1575,6 +1594,12 @@ function drawBuilding(g,cx,cy,z,st){ const hw=TW/2*z,hh=TH/2*z,wallH=(st.h||20)*
     g.fillStyle=ston; g.beginPath();g.moveTo(cx,cy+hh);g.lineTo(cx+hw,cy);g.lineTo(cx+hw,cy-fb);g.lineTo(cx,cy+hh-fb);g.closePath();g.fill(); }
   g.fillStyle=post; g.fillRect(cx-1.5*z,cy+hh-wallH,3*z,wallH);
   g.fillStyle=shade(post,-20); g.fillRect(cx-hw,cy-wallH,2.5*z,wallH); g.fillStyle=shade(post,12); g.fillRect(cx+hw-2.5*z,cy-wallH,2.5*z,wallH);
+  // wood-grain striations on the corner posts — thin uneven strokes, world-seeded so they hold
+  // still under pan/zoom. Same gate as wall granulation: invisible cost at LOD/far zoom.
+  if(!LOD && z>0.55){ const gsd=WX*0.41+WY*0.67;
+    g.strokeStyle='rgba(0,0,0,0.16)'; g.lineWidth=Math.max(0.4,0.5*z);
+    for(let i=0;i<3;i++){ const gf=vhash(gsd,i)*0.7+0.12, gx=cx-1.5*z+gf*3*z, jx=(vhash(gsd+i,2)-0.5)*0.6*z;
+      g.beginPath(); g.moveTo(gx,cy+hh-wallH+1*z); g.lineTo(gx+jx,cy+hh-wallH*0.3); g.lineTo(gx,cy-wallH+1*z); g.stroke(); } }
   if(st.corrugated){ g.strokeStyle='rgba(0,0,0,0.12)';g.lineWidth=0.42*z;       // corrugated metal ribs
     for(let i=1;i<7;i++){const f=i/7; g.beginPath();g.moveTo(cx+hw*f,cy+hh*f-1);g.lineTo(cx+hw*f,cy+hh*f-wallH);g.stroke();
       g.beginPath();g.moveTo(cx-hw*f,cy+hh*f-1);g.lineTo(cx-hw*f,cy+hh*f-wallH);g.stroke();} }
@@ -1635,6 +1660,13 @@ function drawBuilding(g,cx,cy,z,st){ const hw=TW/2*z,hh=TH/2*z,wallH=(st.h||20)*
     g.strokeStyle=rL;g.lineWidth=1.68*z;g.beginPath();g.moveTo(rT[0],rT[1]);g.lineTo(rB[0],rB[1]);g.stroke();
     g.fillStyle=rL; g.fillRect(eL[0]-1*z,eL[1]-3*z,3.5*z,3*z);g.fillRect(eR[0]-2.5*z,eR[1]-3*z,3.5*z,3*z);g.fillRect(eT[0]-1.6*z,eT[1]-1*z,3.2*z,2*z);g.fillRect(eB[0]-1.6*z,eB[1]-1*z,3.2*z,2*z);
     g.strokeStyle=rD;g.lineWidth=1.4*z;g.beginPath();g.moveTo(eL[0],eL[1]);g.lineTo(eB[0],eB[1]);g.lineTo(eR[0],eR[1]);g.stroke();
+    // tile-course striations on the shadow face: short cross-strokes between the eave and ridge
+    // edges, suggesting overlapping ceramic tile rows. Mirrors the rafter-line loop above but
+    // on the eL-eB face, gated by zoom since this only runs in the full-detail (non-LOD) branch.
+    if(z>0.55){ g.strokeStyle=rD; g.lineWidth=Math.max(0.35,0.32*z); g.globalAlpha=0.55;
+      for(let i=1;i<=3;i++){ const f=i/4;
+        g.beginPath(); g.moveTo(eL[0]+(eB[0]-eL[0])*f,eL[1]+(eB[1]-eL[1])*f); g.lineTo(rT[0]+(rB[0]-rT[0])*f,rT[1]+(rB[1]-rT[1])*f); g.stroke(); }
+      g.globalAlpha=1; }
     // round eave tiles (tomoe) along the two front eaves
     g.fillStyle=rL; for(let i=1;i<6;i++){ const f=i/6;
       let x=eL[0]+(eB[0]-eL[0])*f, y=eL[1]+(eB[1]-eL[1])*f; g.beginPath();g.arc(x,y,0.9*z,0,7);g.fill();
@@ -1982,29 +2014,37 @@ function drawRuin(g,cx,cy,z,scorch){ const hw=TW/2*z,hh=TH/2*z; shadowEllipse(g,
 }
 function drawCivic(g,cx,cy,z,civ,era){ const E=ERAS[Math.min(era,4)];
   const styles={
-    [TOWN]:{h:30,roof:'#8a2f26',wall:'#f0e6cc',post:'#7a2d24',rh:22,ov:13},
+    [TOWN]:{h:30,roof:'#8a2f26',wall:'#f0e6cc',post:'#7a2d24',rh:22,ov:13,props:['banner']},
     [FARM]:null,
-    [MARKET]:{h:18,roof:'#9c5a2a',wall:'#efe2c4',post:'#7a2d24',rh:14,ov:12},
-    [SCHOOL]:{h:20,roof:'#3a6ea5',wall:'#f0e6cc',post:'#5a3d24',rh:16,ov:10},
-    [HOSP]:{h:24,roof:'#c43a2c',wall:'#f4eeda',post:'#a02018',rh:16,ov:9,modern:era>=8},
-    [LIB]:{h:20,roof:'#caa23a',wall:'#efe2c4',post:'#7a2d24',rh:16,ov:11},
+    [MARKET]:{h:18,roof:'#9c5a2a',wall:'#efe2c4',post:'#7a2d24',rh:12,ov:11,props:['goods']},
+    [SCHOOL]:{h:20,roof:'#3a6ea5',wall:'#f0e6cc',post:'#5a3d24',rh:16,ov:10,stories:2},
+    [HOSP]:{h:26,roof:'#c43a2c',wall:'#f4eeda',post:'#a02018',rh:16,ov:9,modern:era>=8,props:['lantern2']},
+    [LIB]:{h:20,roof:'#caa23a',wall:'#efe2c4',post:'#7a2d24',rh:16,ov:11,tiers:true,props:['scrollstack']},
     [PARK]:null,
-    [PLANT]:{h:26,roof:'#5a5a5a',wall:'#8a8076',post:'#3a3a3a',rh:10,ov:5,flat:true},
+    [PLANT]:{h:26,roof:'#5a5a5a',wall:'#8a8076',post:'#3a3a3a',rh:10,ov:5,factoryRoof:true,neon:'#14f195',props:['smokestack']},
     [FIRE]:{h:22,roof:'#3a3f6a',wall:'#efe2c4',post:'#7a2d24',rh:16,ov:10},
     [POLICE]:{h:22,roof:'#2c3038',wall:'#e8ecef',post:'#3a3a3a',rh:14,ov:9,modern:era>=8},
     [VALID]:{h:30,roof:'#1a3a3a',wall:'#14302e',post:'#14f195',rh:20,ov:12,neon:'#14f195'},
-    [TEMPLE]:{h:24,roof:'#caa23a',wall:'#f0e6cc',post:'#a03020',rh:20,ov:13},
+    [TEMPLE]:{h:24,roof:'#caa23a',wall:'#f0e6cc',post:'#a03020',rh:20,ov:13,tiers:true,props:['lantern2','torii_small']},
   };
   if(civ===FARM){ drawFarmField(g,cx,cy,z); return; }
   if(civ===PARK){ drawPark(g,cx,cy,z); return; }
   if(LOD){ drawBuildingLOD(g,cx,cy,z,styles[civ]||styles[MARKET]); return; }   // overview: massing only
   drawBuilding(g,cx,cy,z,styles[civ]||styles[MARKET]);
-  // emblems
   const hw=TW/2*z, top=cy-(styles[civ].h+styles[civ].rh+4)*z;
+  if(civ===MARKET){ // static stallkeeper figures — fixed to the building, no simulation cost, flanking the front corners clear of the doorway/goods
+    const hh=TH/2*z, _u=(cx-cam.x)/z,_v=(cy-cam.y)/z, mWX=Math.round(_u/TW+_v/TH),mWY=Math.round(_v/TH-_u/TW), mseed=Math.abs((mWX*5+mWY*9)|0);
+    drawVendorFigure(g,cx-hw*0.62,cy-hh*0.05,z*1.3,SKIN[mseed%SKIN.length],KIM[mseed%KIM.length]);
+    drawVendorFigure(g,cx+hw*0.66,cy+hh*0.1,z*1.3,SKIN[(mseed+3)%SKIN.length],KIM[(mseed+7)%KIM.length]); }
+  // emblems
   g.fillStyle='#fff';
   if(civ===HOSP){ g.fillStyle='#fff'; g.fillRect(cx-1.4*z,top,2.8*z,7*z); g.fillRect(cx-3.5*z,top+2*z,7*z,2.8*z); } // cross
   else if(civ===SCHOOL){ g.fillStyle='#e8c24a'; g.fillRect(cx-3*z,top+1*z,6*z,4*z); g.fillStyle='#fff'; g.fillRect(cx-0.5*z,top+1*z,1*z,4*z);} // book
   else if(civ===LIB){ g.fillStyle='#caa24a'; g.fillRect(cx-2.5*z,top,5*z,5*z);}
+  else if(civ===MARKET){ g.fillStyle='#7a2d24'; g.beginPath();g.ellipse(cx,top+3*z,3*z,2.2*z,0,0,7);g.fill(); g.strokeStyle='#efe2c4';g.lineWidth=0.42*z;g.beginPath();g.moveTo(cx-2.4*z,top+1.4*z);g.lineTo(cx+2.4*z,top+1.4*z);g.stroke();} // basket emblem
+  else if(civ===TEMPLE){ // temple bell silhouette above the roofline
+    g.fillStyle='#caa23a'; g.beginPath();g.moveTo(cx-2.6*z,top+6*z);g.lineTo(cx-1.8*z,top);g.lineTo(cx+1.8*z,top);g.lineTo(cx+2.6*z,top+6*z);g.closePath();g.fill();
+    g.fillStyle='#7a5a1a'; g.fillRect(cx-0.7*z,top-2.2*z,1.4*z,2.2*z); g.fillStyle='#5a3e10';g.fillRect(cx-3*z,top+5.6*z,6*z,1*z); }
   else if(civ===FIRE){ // yagura fire-watch post + hanging hanshō bell
     g.fillStyle='#5a3d24'; g.fillRect(cx-1*z,top-7*z,2*z,9*z);
     g.fillStyle='#caa23a'; g.beginPath();g.arc(cx,top-6*z,2.6*z,0,7);g.fill();
@@ -2237,11 +2277,17 @@ function drawPerson(g,cx,cy,z,a,dir,scale){ scale=scale||1; const Z=z*scale; con
   let robe=a.col; if(hide)robe=['#6a4a2a','#7a5a36','#5a4028','#80603a'][(v*4)|0];
   // feet
   g.fillStyle='#2a2018'; g.fillRect(cx+(-1.7+sw*0.8)*Z,cy+1.4*z,1.4*Z,1.5*z); g.fillRect(cx+(0.3-sw*0.8)*Z,cy+1.4*z,1.4*Z,1.5*z);
+  if(!hide){ g.strokeStyle='rgba(20,16,12,0.6)'; g.lineWidth=Math.max(0.3,0.3*Z);             // sandal strap, period dress only
+    g.beginPath(); g.moveTo(cx+(-1.0+sw*0.8)*Z,cy+1.5*z); g.lineTo(cx+(-1.0+sw*0.8)*Z,cy+2.6*z); g.stroke();
+    g.beginPath(); g.moveTo(cx+(1.0-sw*0.8)*Z,cy+1.5*z); g.lineTo(cx+(1.0-sw*0.8)*Z,cy+2.6*z); g.stroke(); }
   // lower garment
   g.fillStyle=shade(robe,-20); g.beginPath();
   g.moveTo(cx-2.6*Z,cy+1.6*z);g.lineTo(cx+2.6*Z,cy+1.6*z);g.lineTo(cx+1.9*Z,cy-3*z-bob);g.lineTo(cx-1.9*Z,cy-3*z-bob);g.closePath();g.fill();
+  g.fillStyle=shade(robe,-32); g.beginPath();                                                  // center fold/seam — gives the garment a hint of drape
+  g.moveTo(cx-0.5*Z,cy+1.6*z);g.lineTo(cx+0.5*Z,cy+1.6*z);g.lineTo(cx+0.35*Z,cy-3*z-bob);g.lineTo(cx-0.35*Z,cy-3*z-bob);g.closePath();g.fill();
   // sash / belt
-  if(!hide){ g.fillStyle=a.obi||'#e8c24a'; g.fillRect(cx-2*Z,cy-3.6*z-bob,4*Z,1.5*z); g.fillStyle=shade(a.obi||'#e8c24a',-25); g.fillRect(cx-2*Z,cy-2.3*z-bob,4*Z,0.5*z); }
+  if(!hide){ g.fillStyle=a.obi||'#e8c24a'; g.fillRect(cx-2*Z,cy-3.6*z-bob,4*Z,1.5*z); g.fillStyle=shade(a.obi||'#e8c24a',-25); g.fillRect(cx-2*Z,cy-2.3*z-bob,4*Z,0.5*z);
+    if(v>0.6){ g.fillStyle=shade(a.obi||'#e8c24a',30); g.fillRect(cx-0.6*Z,cy-3.3*z-bob,1.2*Z,0.9*z); } } // small woven-pattern fleck, comfortable households only
   else { g.fillStyle='#4a3320'; g.fillRect(cx-2*Z,cy-3*z-bob,4*Z,1*z); }
   // torso
   if(hide){ const rg=g.createLinearGradient(0,cy-7*z-bob,0,cy-3.6*z-bob); rg.addColorStop(0,shade(robe,14)); rg.addColorStop(1,shade(robe,-12)); g.fillStyle=rg; }
@@ -3735,6 +3781,7 @@ function scatterWitnessesWide(vx,vy){
 let disaster=null;            // active earthquake/tornado/meteor object, or null
 let kaiju=null;                // active kaiju object, or null
 let disasterCooldown=70+Math.random()*40;   // seconds; flat floor between ANY two disaster events
+let _lastWardToastAt=-999;                   // debounce: one "wards hold" flavor line per ~6s, not per-tile-per-tick
 const DISASTER_BASE_RISK=0.05;              // flat per-roll risk weight — NOT scaled by era
 
 /* a flat, era-agnostic pool. Picking uniformly means a Gashadokuro can lumber through
@@ -3805,9 +3852,16 @@ function updateDisaster(dt){
 
 /* ---- damage appliers: express destruction purely through existing dev/zone/own/ruin/burn fields,
    exactly like applyRaid() does — no parallel "tile health" system. ---- */
+function wardHoldToast(kind){
+  const now=(typeof performance!=='undefined')?performance.now():0;
+  if(now-_lastWardToastAt<6000)return; _lastWardToastAt=now;
+  const what=kind==='earthquake'?'earthquake':kind==='tornado'?'tornado':kind==='meteor'?'meteor':'giant';
+  toast('⛩ Wards hold',"the shrine's blessing turns the "+what+' aside');
+}
 function quakeDamage(tx,ty,rad){
   for(let j=-rad;j<=rad;j++)for(let i=-rad;i<=rad;i++){ const nx=tx+i,ny=ty+j; if(!inB(nx,ny))continue;
     if(Math.hypot(i,j)>rad)continue; const c=grid[ny][nx]; if(!(c.dev>0||c.civ))continue;
+    if(shrineGrid&&shrineGrid[ny][nx]){ wardHoldToast('earthquake'); continue; }
     if(Math.random()<0.55){ addDebris(nx,ny,3+((Math.random()*3)|0),false);
       if(c.dev>0){ c.dev=Math.max(0,c.dev-1); if(c.dev<=0){ if(c.own===CLIENT)toast('🏚 Quake damage','a holding collapses'); c.zone=0;c.own=0;c.ruin=1; } }
       else if(c.civ&&c.civ!==TOWN&&Math.random()<0.3){ c.civ=0; c.ruin=1; } } }
@@ -3816,6 +3870,7 @@ function tornadoHit(tx,ty,d){
   const c=grid[ty][tx];
   for(let k=0;k<2+((Math.random()*2)|0);k++){ const a=Math.random()*6.283;
     addDebris(tx+Math.cos(a)*0.3,ty+Math.sin(a)*0.3,1,false); }
+  if(shrineGrid&&shrineGrid[ty][tx]){ wardHoldToast('tornado'); return; }
   if((c.dev>0||c.civ)&&Math.random()<0.18){
     if(c.dev>0&&c.dev<=1){ if(c.own===CLIENT)toast('🌪 Swept away','a light structure is lofted and gone'); c.zone=0;c.dev=0;c.own=0;c.ruin=1; }
     else if(c.dev>0){ c.dev=Math.max(0,c.dev-1); }
@@ -3825,9 +3880,14 @@ function tornadoHit(tx,ty,d){
 function meteorImpact(tx,ty){
   const c=grid[ty]&&grid[ty][tx]; if(!c)return;
   addDebris(tx,ty,16+((Math.random()*8)|0),true); addScar(tx,ty,0.55,2);
-  if(c.dev>0){ if(c.own===CLIENT)toast('☄️ Direct hit','a crater where a holding stood'); c.zone=0;c.dev=0;c.own=0;c.ruin=1; }
-  else if(c.civ&&c.civ!==TOWN){ c.civ=0; c.ruin=1; }
+  const warded=shrineGrid&&shrineGrid[ty][tx];
+  if(warded) wardHoldToast('meteor');
+  if(!warded){
+    if(c.dev>0){ if(c.own===CLIENT)toast('☄️ Direct hit','a crater where a holding stood'); c.zone=0;c.dev=0;c.own=0;c.ruin=1; }
+    else if(c.civ&&c.civ!==TOWN){ c.civ=0; c.ruin=1; }
+  }
   for(const[dx,dy]of NEIGH){ const nx=tx+dx,ny=ty+dy; if(!inB(nx,ny))continue; const n=grid[ny][nx];
+    if(shrineGrid&&shrineGrid[ny][nx])continue;
     if(n.dev>0&&Math.random()<0.4){ n.dev=Math.max(0,n.dev-1); addScar(nx,ny,0.3,1); } }
   if(typeof playFireBell==='function')playFireBell(false);
 }
@@ -3906,8 +3966,14 @@ function updateKaiju(dt){
     case 'rampage': {
       k.st+=dt;
       if(k.stepPh-k.lastFoot>0.55){ k.lastFoot=k.stepPh; footstepImpact(k); }
-      // drift toward the densest remaining cluster so the rampage keeps mattering instead of idling
-      const ci=cityInfo(); if(ci&&Math.random()<dt*0.6){ k.tx=ci.cx+(Math.random()-0.5)*4; k.ty=ci.cy+(Math.random()-0.5)*4; }
+      // drift toward the densest remaining cluster so the rampage keeps mattering instead of idling —
+      // but step away from hallowed ground first if the chosen drift point lands inside a ward
+      const ci=cityInfo(); if(ci&&Math.random()<dt*0.6){
+        let ntx=ci.cx+(Math.random()-0.5)*4, nty=ci.cy+(Math.random()-0.5)*4;
+        const rtx=Math.round(ntx), rty=Math.round(nty);
+        if(shrineGrid&&inB(rtx,rty)&&shrineGrid[rty][rtx]){ ntx=ci.cx-(ntx-ci.cx); nty=ci.cy-(nty-ci.cy); }
+        k.tx=ntx; k.ty=nty;
+      }
       const dx=k.tx-k.x, dy=k.ty-k.y, d=Math.hypot(dx,dy)||1;
       if(d>1.2){ k.x+=dx/d*0.45*dt; k.y+=dy/d*0.45*dt; k.dir=dx<0?-1:1; }
       if(Math.random()<dt*1.4) kaijuSpecialMove(k);
@@ -3932,6 +3998,7 @@ function footstepImpact(k){
 function damageTileUnderKaiju(tx,ty){
   for(let j=-1;j<=1;j++)for(let i=-1;i<=1;i++){ const nx=tx+i,ny=ty+j; if(!inB(nx,ny))continue;
     const c=grid[ny][nx]; if(!(c.dev>0||c.civ))continue;
+    if(shrineGrid&&shrineGrid[ny][nx]){ wardHoldToast('kaiju'); continue; }
     if(Math.random()<0.4){
       if(c.dev>0){ c.dev=Math.max(0,c.dev-1); if(c.dev<=0){ if(c.own===CLIENT)toast('🦴 Crushed underfoot','a holding falls beneath the giant'); c.zone=0;c.own=0;c.ruin=1; } }
       else if(c.civ&&c.civ!==TOWN&&Math.random()<0.25){ c.civ=0; c.ruin=1; }
@@ -3942,6 +4009,7 @@ function kaijuSpecialMove(k){
   if(k.kind==='gashadokuro'){                                    // Bone Crush — single heavy stomp, 3-tile radius
     const tx=Math.round(k.x),ty=Math.round(k.y);
     for(let j=-3;j<=3;j++)for(let i=-3;i<=3;i++){ if(Math.hypot(i,j)>3)continue; const nx=tx+i,ny=ty+j; if(!inB(nx,ny))continue;
+      if(shrineGrid&&shrineGrid[ny][nx]){ wardHoldToast('kaiju'); continue; }
       const c=grid[ny][nx]; if((c.dev>0||c.civ)&&Math.random()<0.22){ if(c.dev>0)c.dev=0,c.zone=0,c.own=0,c.ruin=1; else if(c.civ!==TOWN)c.civ=0,c.ruin=1; } }
     addScar(tx,ty,0.55,3); addDebris(tx,ty,14,false);
   } else if(k.kind==='orochi'){                                   // multi-head sweep — 3 independent strike points
