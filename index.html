@@ -55,6 +55,12 @@
     background:linear-gradient(rgba(23,27,32,.82),rgba(12,14,18,.82));border:1px solid var(--edge);
     box-shadow:0 6px 20px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.05);
     backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+  #sbGrip{display:flex;align-items:center;justify-content:center;gap:3px;height:14px;margin:-7px -7px 2px;
+    cursor:grab;border-radius:8px 8px 0 0;touch-action:none;user-select:none;-webkit-user-select:none}
+  #sbGrip:active{cursor:grabbing}
+  #sbGrip span{width:3px;height:3px;border-radius:50%;background:var(--edge)}
+  #sbGrip:hover span{background:var(--sol)}
+  #sidebar.dragging{opacity:.88;box-shadow:0 10px 30px rgba(0,0,0,.7),0 0 0 1px var(--sol)}
   .scard{background:rgba(8,10,13,.55);border:1px solid var(--edge);border-radius:5px;padding:5px 7px}
   #advisor{min-height:34px;max-height:62px;overflow-y:auto;line-height:1.3;color:var(--ink)} #advisor b{color:var(--sol)}
   .demand{display:flex;gap:5px;margin-top:2px}
@@ -159,6 +165,7 @@
 <div id="panel">
   <div id="builds"></div>
   <div id="sidebar">
+    <div id="sbGrip" title="Drag to move this panel"><span></span><span></span><span></span></div>
     <div class="scard" id="advisor"><b>DR. SOL</b> — Zone R·C·I beside roads, raise civics, grow your dynasty.</div>
     <div class="scard">
       <div style="font-weight:700">DEMAND</div>
@@ -182,6 +189,9 @@
       <button class="pbtn pvp" id="pillageBtn" title="Spend $SORU to sack a rival's plot — police nearby lowers your odds">🏴 PILLAGE</button>
       <button class="pbtn pvp" id="arsonBtn" title="Spend $SORU to torch a rival's building — fire stations nearby lower your odds">🔥 ARSON</button>
       <button class="pbtn" id="guardBtn" title="Pay a ronin retainer (120 $SORU) to 100% shield ONE of your buildings against the next raid">🛡 GUARD</button>
+    </div>
+    <div class="pbtns" style="margin-top:4px">
+      <button class="pbtn" id="queryBtn" title="Tap anything on the island — a citizen, yokai, building, or tile — to find out what it is">🔍 QUERY</button>
     </div>
   </div>
 </div>
@@ -333,7 +343,7 @@ const S={ era:0, pop:0, cap:0, jobs:0, comJobs:0, indJobs:0,
   netTurn:0, solShare:0, demand:{R:0.5,C:0.3,I:0.2}, healthPct:0, eduPct:0, safetyPct:1, electricity:false,
   powerCap:0, powerUse:0, turn:0, kami:0, burned:0, recentBurn:0,
   wallet:{sol:5.0, soru:60000}, dex:{sol:80, soru:600000}, // $SORU is THE spend currency; SOL = premium/creator-reward rail
-  tool:null, overlay:false, hand:false, douse:false, demo:false, pillage:false, arson:false };
+  tool:null, overlay:false, hand:false, douse:false, demo:false, pillage:false, arson:false, query:false };
 
 /* ============================ ENVIRONMENT: DAY-NIGHT + WEATHER ============================ */
 const CYCLE=200; // seconds per full day
@@ -2213,17 +2223,11 @@ function vegSpecies(seed,tx,ty,h){
   if(border) return 'holly';                                  // border accent along map/path edges
   if(nearForest) return (r<0.07)?'fgrass':'moss';              // shaded/forested -> forest grass + moss
   if(nearBuild||nearRoad_) return (r<0.06)?'azalea':(r<0.11?'nandina':'camellia'); // mid-layer near settlement
-  return (r<0.10)?'miscanthus':'fgrass';                       // open ground -> tall grass, sparse forest grass
+  return 'fgrass';                                             // open ground -> sparse forest grass (miscanthus removed)
 }
 function drawVeg(g,cx,cy,z,seed,kind){
   const P=agePal(), mono=VOID;
   const ink=c=>mono?inkize(c):c;
-  if(kind==='miscanthus'){ // tall silver grass — a loose fan of thin blades, open-field accent
-    const base=cy+2*z;
-    g.strokeStyle=ink('#b8a86a'); g.lineWidth=0.9*z; g.lineCap='round';
-    for(let i=0;i<6;i++){ const a=(i/5-0.5)*1.1+(vhash(seed,i*7)*2-1)*0.12, ht=(7+vhash(seed,i*3)*4)*z;
-      g.beginPath();g.moveTo(cx+(i-2.5)*1.1*z,base);g.quadraticCurveTo(cx+(i-2.5)*1.1*z+a*3*z,base-ht*0.6,cx+(i-2.5)*1.1*z+a*6*z,base-ht);g.stroke(); }
-    return; }
   if(kind==='fgrass'){ // Japanese forest grass — low, gently arching mound, shade-green
     const base=cy+1.5*z;
     g.fillStyle=ink('rgba(60,40,20,0.10)'); g.beginPath();g.ellipse(cx,base,5*z,2*z,0,0,7);g.fill();
@@ -2387,7 +2391,13 @@ function drawPerson(g,cx,cy,z,a,dir,scale){ scale=scale||1; const Z=z*scale; con
   if(a.acc==='yoke'){ // botefuri street vendor — shoulder pole + two laden baskets
     g.strokeStyle='#7a5630'; g.lineWidth=0.6*Z; g.beginPath();g.moveTo(cx-4.6*Z,cy-6.6*z-bob);g.lineTo(cx+4.6*Z,cy-6.6*z-bob);g.stroke();
     g.fillStyle='#b89a5a'; g.beginPath();g.ellipse(cx-4.6*Z,cy-4.3*z,2.1*Z,1.5*z,0,0,7);g.fill(); g.beginPath();g.ellipse(cx+4.6*Z,cy-4.3*z,2.1*Z,1.5*z,0,0,7);g.fill();
-    const wseed=((a.ph||0)*1000)|0;   // STABLE per-agent seed (ph is set once at spawn) — was keyed off screen cx+cy, which changed every frame as the agent walked/camera panned, making the wares flicker through all 4 colours
+    // TRUE stable per-agent seed, cached once on the agent object itself. The previous fix attempt
+    // derived this from a.ph, but a.ph is the walk-cycle gait phase (incremented every frame by
+    // updateResidents/updateTraffic), so it was never actually stationary — the wares still cycled
+    // through all 4 colours on every tick while the vendor walked. Caching a one-time random value
+    // on first draw makes the colour genuinely fixed for the agent's lifetime.
+    if(a.wseed==null) a.wseed=(Math.random()*4)|0;
+    const wseed=a.wseed;
     const wares=['#c0392b','#3f8a4a','#e8c24a','#46708f']; g.fillStyle=wares[wseed%4]; g.beginPath();g.arc(cx-4.6*Z,cy-5*z,1*Z,0,7);g.fill();
     g.fillStyle=wares[(wseed+2)%4]; g.beginPath();g.arc(cx+4.6*Z,cy-5*z,1*Z,0,7);g.fill(); }
 }
@@ -3045,6 +3055,13 @@ function render(){ ctx.setTransform(DPR,0,0,DPR,0,0);
   for(const e of encounters)for(const m of e.mob) if(m.state!=='down') acts.push({tx:m.x,ty:m.y,k:'a',a:m,d:m.x+m.y});
   if(kaiju&&kaiju.militia) for(const m of kaiju.militia) if(m.state!=='down') acts.push({tx:m.x,ty:m.y,k:'a',a:m,d:m.x+m.y});
   for(const p of decay) if(p.kind==='prop') acts.push({tx:p.x,ty:p.y,k:'a',a:p,d:p.x+p.y});   // seated beggars / musicians / fortune-tellers
+  // Corpses and still-standing raid defenders used to be drawn entirely in drawViolenceFX(), in
+  // their own pass AFTER this whole unified block was stamped — so they always painted on top of
+  // every citizen regardless of actual depth, the same "floats over everyone" bug stains had
+  // before being moved into the pre-pass above. Folding them into `acts` here makes them sort
+  // correctly against passers-by: a citizen walking in front of a body now draws in front of it.
+  for(const c of corpses) acts.push({tx:c.x,ty:c.y,k:'corpse',c,d:c.x+c.y});
+  for(const e of encounters) if(e.raid&&e.defenders) for(const d of e.defenders) if(d.state!=='down') acts.push({tx:d.x,ty:d.y,k:'def',d,d:d.x+d.y});
   acts.sort((p,q)=>p.d-q.d||p.tx-q.tx);
   octx.setTransform(DPR,0,0,DPR,0,0); octx.clearRect(0,0,VW,VH);
   actx.setTransform(DPR,0,0,DPR,0,0); actx.clearRect(0,0,VW,VH);   // agents drawn here too, for the fine-ink tier
@@ -3057,6 +3074,8 @@ function render(){ ctx.setTransform(DPR,0,0,DPR,0,0);
     else if(o.k==='z')drawZoneBuilding(octx,cx,cy,z,o.c);
     else if(o.k==='farm')drawFarmField(octx,cx,cy,z,o.c);
     else if(o.k==='c')drawCivic(octx,cx,cy,z,o.civ,S.era);
+    else if(o.k==='corpse'){ drawCorpse(octx,cx,cy,z,o.c); drawCorpse(actx,cx,cy,z,o.c); }
+    else if(o.k==='def'){ drawDefender(octx,cx,cy,z,o.d); drawDefender(actx,cx,cy,z,o.d); }
     else { drawAgent(octx,cx,cy,z,o.a); drawAgent(actx,cx,cy,z,o.a,true); }   // colour+occlusion / fine-ink source (no shadow)
     drew=true; }
   if(drew) stampInk(ctx,z);
@@ -4536,13 +4555,10 @@ function drawBlockBrace(g,cx,cy,z,dir){
   g.restore(); }
 
 function drawViolenceFX(ctx,z){
-  // NOTE: ground blood stains are now drawn in the pre-pass above (with litter), so agents
-  // standing on a stain are correctly painted on top of it instead of it floating over them.
-  const list=corpses.map(c=>({k:'c',c,d:c.x+c.y}));
-  for(const e of encounters) if(e.raid&&e.defenders) for(const d of e.defenders) if(d.state!=='down') list.push({k:'d',d,dd:d.x+d.y});
-  list.sort((a,b)=>(a.d!=null?a.d:a.dd)-(b.d!=null?b.d:b.dd));
-  for(const o of list){ if(o.k==='c'){ const[cx,cy]=s2(o.c.x,o.c.y); if(cx<-90||cx>VW+90||cy<-90||cy>VH+90)continue; drawCorpse(ctx,cx,cy,z,o.c); }
-    else { const[cx,cy]=s2(o.d.x,o.d.y); if(cx<-90||cx>VW+90||cy<-90||cy>VH+90)continue; drawDefender(ctx,cx,cy,z,o.d); } }
+  // NOTE: ground blood stains are drawn in the pre-pass above (with litter), and corpses /
+  // still-standing raid defenders are now drawn in the unified depth-sorted agent pass in
+  // render() — both moved there so they correctly occlude with (and are occluded by) ordinary
+  // citizens passing by, instead of always painting on top regardless of actual depth.
   for(const e of encounters){ if(e.raid&&e.dmg>0){ const[cx,cy]=s2(e.rtx,e.rty); if(cx>-140&&cx<VW+140&&cy>-180&&cy<VH+140) drawRaidDamage(ctx,cx,cy,z,e); } }
   for(const d of debris){ const[cx,cy]=s2(d.x,d.y); if(cx<-90||cx>VW+90||cy<-90||cy>VH+90)continue; drawDebris(ctx,cx,cy,z,d); }
   for(const p of sprays){ const[cx,cy]=s2(p.x,p.y); if(cx<-90||cx>VW+90||cy<-90||cy>VH+90)continue; drawSpray(ctx,cx,cy,z,p); }
@@ -4759,10 +4775,10 @@ function buildPalette(){ const el=document.getElementById('builds'); el.innerHTM
     if(locked){const lk=document.createElement('div');lk.className='lk';lk.textContent='🔒';d.appendChild(lk);}
     d.onclick=()=>{ if(locked){advise('That needs the '+ERAS[it.era].nm+' age.');return;}
       playUISfx('click',0.5);
-      S.tool=it;S.hand=false;S.douse=false;S.demo=false;S.pillage=false;S.arson=false; ['handBtn','douseBtn','demoBtn','pillageBtn','arsonBtn'].forEach(b=>document.getElementById(b).classList.remove('on'));
+      S.tool=it;S.hand=false;S.douse=false;S.demo=false;S.pillage=false;S.arson=false;S.query=false; ['handBtn','douseBtn','demoBtn','pillageBtn','arsonBtn','queryBtn'].forEach(b=>document.getElementById(b).classList.remove('on'));
       markSel(); cv.style.cursor='crosshair'; };
     el.appendChild(d);} markSel(); }
-function markSel(){ document.querySelectorAll('.bbtn').forEach(d=>d.classList.toggle('sel', S.tool&&!S.hand&&!S.douse&&!S.demo&&!S.pillage&&!S.arson&&!S.guard&&d.dataset.id===S.tool.id)); }
+function markSel(){ document.querySelectorAll('.bbtn').forEach(d=>d.classList.toggle('sel', S.tool&&!S.hand&&!S.douse&&!S.demo&&!S.pillage&&!S.arson&&!S.guard&&!S.query&&d.dataset.id===S.tool.id)); }
 
 /* ============================ INPUT / ACTIONS ============================ */
 let lastPoorMsg=0;
@@ -4807,6 +4823,10 @@ function place(tx,ty){ if(!inB(tx,ty))return; const c=grid[ty][tx]; gridVersion+
 }
 let dragging=false,dragPan=false,last=null,downPt=null,moved=false,pinched=false; const ptrs=new Map(); let pinch=null;
 function evp(e){const r=cv.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top];}
+// single chokepoint for both mouse-click and touch-tap resolution: the QUERY tool needs the
+// original screen pixel position (to find the nearest citizen/yokai/etc under the finger),
+// which place(tx,ty) never receives since it only ever gets resolved tile coordinates.
+function clickAt(mx,my){ if(S.query){ inspectAt(mx,my); return; } place(...pick(mx,my)); }
 cv.addEventListener('contextmenu',e=>e.preventDefault());
 cv.addEventListener('pointerdown',e=>{ try{cv.setPointerCapture(e.pointerId);}catch(_){} ptrs.set(e.pointerId,evp(e));
   if(ptrs.size>=2){const p=[...ptrs.values()];pinch={d:Math.hypot(p[0][0]-p[1][0],p[0][1]-p[1][1]),z:cam.zoom,mx:(p[0][0]+p[1][0])/2,my:(p[0][1]+p[1][1])/2};pinched=true;dragging=false;dragPan=false;return;}
@@ -4814,7 +4834,7 @@ cv.addEventListener('pointerdown',e=>{ try{cv.setPointerCapture(e.pointerId);}ca
   const touch=(e.pointerType==='touch'), forcePan=(e.button===1||e.button===2||S.hand);
   if(forcePan){ dragPan=true; cv.style.cursor='grabbing'; }
   else if(touch){ dragging=false; dragPan=false; }          // touch: decide tap vs pan on move/up
-  else { dragging=true; place(...pick(...last)); render(); } // mouse: paint immediately
+  else { dragging=!S.query; clickAt(...last); render(); } // mouse: paint immediately (query doesn't drag-paint)
 });
 cv.addEventListener('pointermove',e=>{ if(ptrs.has(e.pointerId))ptrs.set(e.pointerId,evp(e)); const[mx,my]=evp(e);
   if(pinch&&ptrs.size>=2){const p=[...ptrs.values()];const d=Math.hypot(p[0][0]-p[1][0],p[0][1]-p[1][1]);setZoom(pinch.z*(d/pinch.d),pinch.mx,pinch.my);return;}
@@ -4825,22 +4845,124 @@ cv.addEventListener('pointermove',e=>{ if(ptrs.has(e.pointerId))ptrs.set(e.point
   if(dragging&&last){last=[mx,my]; if(S.tool&&(S.tool.road||S.tool.wire||S.tool.zone!=null)||S.demo)place(...pick(mx,my)); render();return;}
   if(!touch){ hover=pick(mx,my); render(); } });
 function endPtr(e){ const touch=(e.pointerType==='touch');
-  if(touch&&!moved&&!dragPan&&!pinched&&downPt&&ptrs.size<=1){ place(...pick(downPt[0],downPt[1])); render(); } // tap = build
-  ptrs.delete(e.pointerId); if(ptrs.size<2)pinch=null; if(ptrs.size===0)pinched=false; dragging=false;dragPan=false;downPt=null; if(!S.hand)cv.style.cursor='crosshair'; }
+  if(touch&&!moved&&!dragPan&&!pinched&&downPt&&ptrs.size<=1){ clickAt(downPt[0],downPt[1]); render(); } // tap = build / query
+  ptrs.delete(e.pointerId); if(ptrs.size<2)pinch=null; if(ptrs.size===0)pinched=false; dragging=false;dragPan=false;downPt=null; if(!S.hand)cv.style.cursor=S.query?'help':'crosshair'; }
 cv.addEventListener('pointerup',endPtr); cv.addEventListener('pointercancel',endPtr);
 cv.addEventListener('wheel',e=>{e.preventDefault();const[mx,my]=evp(e);setZoom(cam.zoom*(e.deltaY<0?1.12:0.89),mx,my);},{passive:false});
 function setZoom(z,mx,my){z=clamp(z,ZMIN,ZMAX);const a=(mx-cam.x)/cam.zoom,b=(my-cam.y)/cam.zoom;cam.zoom=z;cam.x=mx-a*z;cam.y=my-b*z;render();}
+
+/* ============================ QUERY / INSPECT TOOL ============================
+   "What is that?" — tap anything with the 🔍 QUERY tool active and get a plain-
+   language toast naming it. Two passes: (1) screen-space nearest-agent search
+   across every live entity pool (citizens, vendors, ronin, defenders, corpses,
+   yokai, kaiju, litter/street-life props), since those are the things a person
+   actually points at; (2) falls back to the tile itself (terrain/zone/building/
+   road/etc.) when nothing animate is close enough to the tap. */
+const PED_NAME={kimono:'Townsperson',porter:'Porter',farmer:'Farmer',child:'Child',monk:'Monk',
+  merchant:'Merchant',samurai:'Samurai',noble:'Noble',leper:'Ailing pilgrim',drunk:'Drunkard',
+  vendor:'Street vendor',pilgrim:'Pilgrim',courtesan:'Courtesan'};
+const PROP_NAME={beggar:'Beggar',musician:'Street musician',fortune:'Fortune teller',
+  trash:'Trash heap',pottery:'Broken pottery',sewage:'Sewage puddle'};
+const CART_NAME={ox:'Ox cart',kago:'Kago palanquin',hand:'Handcart'};
+function inspectName(o){ // best-effort label for any live agent/object
+  if(!o)return null;
+  if(o.kind==='ronin') return (o.armor?'Armored ':'')+'Rōnin'+(o.torch?' (torch-bearer)':'');
+  if(o.kind==='cart') return CART_NAME[o.type]||'Cart';
+  if(o.kind==='animal') return o.type==='cat'?'Stray cat':'Animal';
+  if(o.kind==='prop') return PROP_NAME[o.sub]||'Street life';
+  if(o.kit) return (o.guard?'Armed defender — ':'Defender — ')+(PED_NAME[o.kit.type]||'Villager');  // raid defender wrapper
+  if(o.__corpse) return o.lethal?'A body — slain in the violence':'A body — fallen, unconscious';
+  if(o.__kaiju) return 'KAIJU — '+(o.name||'???');
+  if(o.__app) return (APP_MSG[o.kind]&&APP_MSG[o.kind][0])||('Yōkai — '+o.kind);
+  if(o.type) return PED_NAME[o.type]||'Villager';
+  return null;
+}
+function tileDescription(tx,ty){
+  if(!inB(tx,ty)) return 'The void — beyond the island\'s edge';
+  const c=grid[ty][tx];
+  if(c.civ) return (CIVIC_NAME[c.civ]||'Civic building')+(c.burn?' (on fire!)':'')+(c.own===CLIENT?' · yours':(c.own?' · rival-owned':''));
+  if(c.zone){ const zn=c.zone===ZR?'Housing':(c.zone===ZC?'Commerce':'Industry');
+    if(c.ruin) return zn+' — burned-out ruin';
+    if(c.dev<=0) return zn+' plot — empty lot';
+    return zn+' (level '+c.dev+')'+(c.own===CLIENT?' · yours':(c.own?' · rival-owned':''))+(c.guard?' · 🛡 guarded':'')+(c.blight?' · neglected':''); }
+  if(c.ruin) return 'Burned-out ruin';
+  if(c.road) return 'Road';
+  if(c.wire) return 'Power line';
+  if(c.burn) return 'Fire';
+  const TER_NAME={[WATER]:'Water',[SAND]:'Sand',[GRASS]:'Grass',[GRASS2]:'Grass',[FOREST]:'Forest',[BARE]:'Bare ground',[ROCK]:'Rock',[SNOW]:'Snow'};
+  return TER_NAME[c.ter]||'Ground';
+}
+function inspectAt(mx,my){
+  const tap=[mx,my];
+  let best=null, bestD=Infinity;
+  const tryAgent=(o,wx,wy,tag)=>{ const[sx,sy]=s2(wx,wy); const d=Math.hypot(sx-tap[0],sy-(tap[1])); if(d<bestD){bestD=d;best=o; if(tag)o[tag]=true;} };
+  for(const u of traffic) if(!u.claimed) tryAgent(u,u.wx,u.wy);
+  for(const u of residents) if(!u.claimed) tryAgent(u,u.x,u.y);
+  for(const h of farmHands) tryAgent(h,h.x,h.y);
+  for(const p of decay) if(p.kind==='prop') tryAgent(p,p.x,p.y);
+  for(const e of encounters){ for(const m of e.mob) if(m.state!=='down') tryAgent(m,m.x,m.y);
+    if(e.raid&&e.defenders) for(const d of e.defenders) if(d.state!=='down') tryAgent(d,d.x,d.y); }
+  if(kaiju&&kaiju.militia) for(const m of kaiju.militia) if(m.state!=='down') tryAgent(m,m.x,m.y);
+  for(const c of corpses) tryAgent(c,c.x,c.y,'__corpse');
+  if(kaiju) tryAgent(kaiju,kaiju.x,kaiju.y,'__kaiju');
+  for(const a of apparitions) tryAgent(a,a.x,a.y,'__app');
+  // an agent silhouette is roughly TH*z tall on screen; ~18px of slop at zoom 1 reads as
+  // "tapped the figure", beyond that it's clearly empty ground/another tile.
+  const AGENT_RADIUS=Math.max(14,TH*cam.zoom*0.9);
+  const name=(bestD<AGENT_RADIUS)?inspectName(best):null;
+  if(name){ toast('🔍 '+name); return; }
+  const[tx,ty]=pick(mx,my);
+  toast('🔍 '+tileDescription(tx,ty));
+}
 function fit(){cam.zoom=clamp(0.62*60/W,ZMIN,ZMAX);cam.x=VW/2-(W/2-H/2)*(TW/2)*cam.zoom;cam.y=VH/2-(W/2+H/2)*(TH/2)*cam.zoom-30;render();}
 document.getElementById('zin').onclick=()=>setZoom(cam.zoom*1.2,VW/2,VH/2);
 document.getElementById('zout').onclick=()=>setZoom(cam.zoom*0.83,VW/2,VH/2);
 document.getElementById('zfit').onclick=fit;
 
-function toolBtn(id,prop){ const PROPS=['hand','douse','demo','pillage','arson','guard'], BTNS=['handBtn','douseBtn','demoBtn','pillageBtn','arsonBtn','guardBtn'];
+function toolBtn(id,prop){ const PROPS=['hand','douse','demo','pillage','arson','guard','query'], BTNS=['handBtn','douseBtn','demoBtn','pillageBtn','arsonBtn','guardBtn','queryBtn'];
   document.getElementById(id).onclick=function(){ playUISfx('click',0.5); S[prop]=!S[prop]; if(S[prop]){S.tool=null; PROPS.forEach(p=>{if(p!==prop)S[p]=false;});}
   BTNS.forEach(b=>document.getElementById(b).classList.toggle('on',document.getElementById(b)===this&&S[prop]));
-  markSel(); cv.style.cursor=S.hand?'grab':'crosshair'; };}
-toolBtn('handBtn','hand'); toolBtn('douseBtn','douse'); toolBtn('demoBtn','demo'); toolBtn('pillageBtn','pillage'); toolBtn('arsonBtn','arson'); toolBtn('guardBtn','guard');
+  markSel(); cv.style.cursor=S.hand?'grab':(S.query?'help':'crosshair'); };}
+toolBtn('handBtn','hand'); toolBtn('douseBtn','douse'); toolBtn('demoBtn','demo'); toolBtn('pillageBtn','pillage'); toolBtn('arsonBtn','arson'); toolBtn('guardBtn','guard'); toolBtn('queryBtn','query');
 document.getElementById('valBtn').onclick=function(){S.overlay=!S.overlay;this.classList.toggle('on',S.overlay);if(S.overlay)adviseValue();render();};
+
+/* ============================ DRAGGABLE SIDEBAR ============================
+   The DEX/wallet/PILLAGE/etc panel can be picked up by its grip and dropped
+   anywhere on screen — handy on mobile where it can sit over the build tray
+   or block a hand. Position is in plain left/top pixels (not the original
+   right-anchored CSS), clamped to stay fully on-screen, and persisted across
+   sessions the same way other UI prefs are (optGet/optSet -> localStorage). */
+(function(){
+  const sb=document.getElementById('sidebar'), grip=document.getElementById('sbGrip');
+  if(!sb||!grip)return;
+  function clampPos(left,top){
+    const w=sb.offsetWidth||178, h=sb.offsetHeight||200;
+    return { left: clamp(left, 4, Math.max(4,window.innerWidth-w-4)),
+             top:  clamp(top,  4, Math.max(4,window.innerHeight-h-4)) };
+  }
+  function applyPos(left,top){ sb.style.left=left+'px'; sb.style.top=top+'px'; sb.style.right='auto'; }
+  const saved=optGet('sidebarPos',null);
+  if(saved&&typeof saved.left==='number'&&typeof saved.top==='number'){
+    const p=clampPos(saved.left,saved.top); applyPos(p.left,p.top);
+  }
+  let dragOff=null;
+  function startDrag(e){ const r=sb.getBoundingClientRect();
+    dragOff=[e.clientX-r.left, e.clientY-r.top];
+    sb.classList.add('dragging'); try{grip.setPointerCapture(e.pointerId);}catch(_){}
+    e.preventDefault(); }
+  function moveDrag(e){ if(!dragOff)return;
+    const p=clampPos(e.clientX-dragOff[0], e.clientY-dragOff[1]); applyPos(p.left,p.top); }
+  function endDrag(e){ if(!dragOff)return; dragOff=null; sb.classList.remove('dragging');
+    const r=sb.getBoundingClientRect(); optSet('sidebarPos',{left:r.left,top:r.top}); }
+  grip.addEventListener('pointerdown',startDrag);
+  grip.addEventListener('pointermove',moveDrag);
+  grip.addEventListener('pointerup',endDrag);
+  grip.addEventListener('pointercancel',endDrag);
+  // keep the panel on-screen if the window/orientation changes
+  addEventListener('resize',()=>{ const r=sb.getBoundingClientRect();
+    if(sb.style.left){ const p=clampPos(r.left,r.top); applyPos(p.left,p.top); } });
+})();
+
 function advanceAge(){ if(S.era>=ERAS.length-1)return; S.era++; S.electricity=researchedElectric(); buildPalette(); refreshHUD();
   toast(ERAS[S.era].jp+' '+ERAS[S.era].nm,'a new age dawns across the island'); advise('The age turns to <b>'+ERAS[S.era].nm+'</b> — the island\'s collective Kami reshapes the world. New works unlocked.'); }
 advanceBtn.onclick=()=>{ if(S.era>=ERAS.length-1){advise('<b>Quantum Edo</b> — the legendary final age. The island can rise no further.');return;}
@@ -5454,7 +5576,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     once('selbuild',SELBUILD_TXT[cur]); },true);
 
   if(typeof window.place==='function'){ var _place=window.place;
-    window.place=function(){ var built=(typeof S!=='undefined'&&S.tool&&!S.hand&&!S.douse&&!S.demo&&!S.pillage&&!S.arson&&!S.guard);
+    window.place=function(){ var built=(typeof S!=='undefined'&&S.tool&&!S.hand&&!S.douse&&!S.demo&&!S.pillage&&!S.arson&&!S.guard&&!S.query);
       var r=_place.apply(this,arguments);
       if(built) once('placed',PLACED_TXT[cur]);
       return r; }; }
@@ -5492,14 +5614,19 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     suiko:'Guard. One ronin, one building, one raid blocked. Doesn\'t last forever. 🛡'
   });
   tipBtn('handBtn','move',{
-    myo:'✋ MOVE lets you lift a piece and set it down elsewhere — rework the composition without tearing the canvas.',
-    borg:'✋ MOVE relocates a structure without demolition. Non-destructive repositioning.',
-    suiko:'✋ MOVE picks a building up, puts it somewhere else. No demolition needed.'
+    myo:'✋ MOVE locks the canvas to panning — drag to glide the view across the island without nudging any building. Handy on a touch screen, darling.',
+    borg:'✋ MOVE forces drag input to pan the camera instead of placing/removing tiles. Does not relocate structures. Useful on touch devices.',
+    suiko:'✋ MOVE. Just pans the view around. Doesn\'t touch your buildings. For touchscreens mostly.'
   });
   tipBtn('demoBtn','raze',{
     myo:'⛏ RAZE clears your own works to make room for the next idea. Rivals\' plots you must take by force — PILLAGE or ARSON, no other brush for that.',
     borg:'⛏ RAZE removes your own structures. Rival-owned plots require PILLAGE or ARSON; RAZE has no effect on them. Ownership-gated function.',
     suiko:'⛏ RAZE clears your own stuff. Rivals\' plots, you need PILLAGE or ARSON. RAZE won\'t touch those.'
+  });
+  tipBtn('queryBtn','query',{
+    myo:'🔍 QUERY — point at anything, a soul, a yōkai, a humble plot of grass, and it will whisper its name to you.',
+    borg:'🔍 QUERY identifies whatever you tap: citizen, yōkai, structure, or terrain. Read-only — no cost, no effect on the world.',
+    suiko:'🔍 QUERY. Tap a thing, it tells you what it is. Free. Doesn\'t change anything.'
   });
 })();
 
