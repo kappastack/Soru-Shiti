@@ -326,6 +326,7 @@ const VAL_WEIGHT      = 5;       // a Validator counts as 5 standing plots of pr
 /* Kami = EXACTLY the total $SORU ever burned (1:1, no simulation). Ages turn
    only when the island's collective burn reaches the KAMI_REQ thresholds.     */
 const DEV_SIMULATE_KAMI = false; // dev/test only: fakes other players' burn so ages advance solo. SHIP AS false.
+const DEV_ERA_SWITCH    = true;  // dev/test only: manual era-jump panel for curating look/style. SHIP AS false.
 
 /* ============================ STATE ============================ */
 const S={ era:0, pop:0, cap:0, jobs:0, comJobs:0, indJobs:0,
@@ -4845,6 +4846,51 @@ function advanceAge(){ if(S.era>=ERAS.length-1)return; S.era++; S.electricity=re
 advanceBtn.onclick=()=>{ if(S.era>=ERAS.length-1){advise('<b>Quantum Edo</b> — the legendary final age. The island can rise no further.');return;}
   const a=KAMI_REQ[S.era],b=KAMI_REQ[S.era+1],pct=Math.floor(clamp((S.kami-a)/(b-a),0,1)*100);
   advise('Ages turn from <b>collective Kami</b> (⛩) — every $SORU burned across the island fuels it, never one player. Next age <b>'+ERAS[S.era+1].nm+'</b> at '+pct+'%.'); };
+
+/* ---- DEV: manual era jump (curation only) ----
+   Sets S.era directly, skips Kami/turn logic entirely, then refreshes everything
+   that's keyed off era: build menu gating, electricity flag, HUD text, and the
+   render cache (worldKey() already includes S.era, so bumping gridVersion just
+   forces an immediate repaint rather than waiting on the next natural redraw). */
+function jumpToEra(n){
+  n=clamp(n|0,0,ERAS.length-1); if(n===S.era)return;
+  S.era=n; S.electricity=researchedElectric();
+  buildPalette(); refreshHUD(); gridVersion++; render();
+  updateDevEraPanel();
+  toast(ERAS[S.era].jp+' '+ERAS[S.era].nm,'dev: era jump');
+}
+let _devEraBtns=null;
+function updateDevEraPanel(){ if(!_devEraBtns)return;
+  _devEraBtns.forEach((b,i)=>b.classList.toggle('on',i===S.era)); }
+function initDevEraSwitch(){
+  if(!DEV_ERA_SWITCH)return;
+  const wrap=document.createElement('div');
+  wrap.id='devEraPanel';
+  wrap.style.cssText='position:fixed;top:48px;right:8px;z-index:10001;display:flex;flex-direction:column;gap:3px;'
+    +'background:linear-gradient(#1b1f24,#101317);border:1px solid var(--edge);border-radius:6px;'
+    +'box-shadow:0 2px 10px rgba(0,0,0,.6);padding:6px;font:11px/1.2 ui-monospace,Menlo,monospace;max-width:128px;';
+  const label=document.createElement('div');
+  label.textContent='DEV · ERA JUMP'; label.style.cssText='color:var(--muted);font-weight:700;letter-spacing:.04em;padding:0 2px 2px;font-size:9px;';
+  wrap.appendChild(label);
+  _devEraBtns=ERAS.map((e,i)=>{
+    const b=document.createElement('button');
+    b.type='button'; b.textContent=i+' · '+e.nm;
+    b.style.cssText='all:unset;cursor:pointer;display:block;width:100%;padding:4px 6px;border-radius:4px;'
+      +'color:var(--ink);font:inherit;white-space:nowrap;';
+    b.onmouseenter=()=>{ if(i!==S.era)b.style.background='#262b31'; };
+    b.onmouseleave=()=>{ if(i!==S.era)b.style.background=''; };
+    b.onclick=()=>jumpToEra(i);
+    wrap.appendChild(b);
+    return b;
+  });
+  // 'on' state styling (mirrors .res/tool button accent rather than fighting the inline style above)
+  const styleEl=document.createElement('style');
+  styleEl.textContent='#devEraPanel button.on{background:var(--sol);color:#06311f;font-weight:700;}';
+  document.head.appendChild(styleEl);
+  document.body.appendChild(wrap);
+  updateDevEraPanel();
+}
+initDevEraSwitch();
 // DEX
 function dexPrice(){return S.dex.sol/S.dex.soru;}
 function openDex(){document.getElementById('dexModal').classList.add('show');refreshDex();}
