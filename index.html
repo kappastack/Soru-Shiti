@@ -244,6 +244,10 @@ const ZR=1,ZC=2,ZI=3;
 const TOWN=1,FARM=2,MARKET=3,SCHOOL=4,HOSP=5,LIB=6,PARK=7,PLANT=8,VALID=9,TEMPLE=10,FIRE=11,POLICE=12;
 const CLIENT=1; // ownership: 0 none, 1 you, 2+ others
 const NEIGH=[[1,0],[-1,0],[0,1],[0,-1]];
+// ---- farm crop cycle: stage indices + per-group crop type ----
+const CROP=['rice','millet','daikon','soy','tea','eggplant'];
+const FARM_STAGE_T=[12,20,40,50]; // seconds in tilled/seeded/sprout/mature before advancing (sum~2min); 'ready'(4) holds until harvest
+let _farmGroups=null, _farmGroupsVer=-1; // [{id,tiles:[[x,y]..],crop}], cached by gridVersion
 
 const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
 let DPR=Math.min(2,window.devicePixelRatio||1);
@@ -1515,6 +1519,16 @@ function glassFace(g,O,U,V,nu,nv,night){ const P=(u,v)=>[O[0]+u*(U[0]-O[0])+v*(V
   for(let i=0;i<nu;i++)for(let j=0;j<nv;j++){ const a=P(i/nu+0.06,j/nv+0.05),b=P((i+1)/nu-0.06,j/nv+0.05),c=P((i+1)/nu-0.06,(j+1)/nv-0.05),d=P(i/nu+0.06,(j+1)/nv-0.05);
     const lit=night>0.3&&vhash(i*3.1+j*5.7,i+j*2)>0.55; g.fillStyle= lit?'#ffe7a0':(night>0.3?'#23415e':'#86bcdc');
     g.beginPath();g.moveTo(a[0],a[1]);g.lineTo(b[0],b[1]);g.lineTo(c[0],c[1]);g.lineTo(d[0],d[1]);g.closePath();g.fill(); } }
+/* a stallkeeper standing/seated behind their counter — fixed to the stall (not a residents[] agent),
+   so it costs nothing in simulation; just gives commerce buildings an occupant instead of reading
+   as an abandoned stand. Reuses the same proportions/values as the walking-pedestrian figure. */
+function drawVendorFigure(g,cx,cy,z,skin,cloth){
+  g.fillStyle=shade(cloth,-22); g.beginPath(); g.ellipse(cx,cy-2.6*z,2.3*z,3.1*z,0,0,7); g.fill();          // torso/shoulders, in shadow under the awning
+  g.fillStyle=cloth; g.beginPath(); g.ellipse(cx-0.4*z,cy-2.8*z,2*z,2.7*z,0,0,7); g.fill();                  // lit half
+  g.fillStyle=skin; g.beginPath(); g.arc(cx,cy-6*z,1.5*z,0,7); g.fill();                                     // head
+  g.fillStyle=shade(cloth,10); g.beginPath(); g.ellipse(cx+1.6*z,cy-3.6*z,0.7*z,1.6*z,0.5,0,7); g.fill();   // raised arm, gesturing toward wares
+  g.fillStyle=skin; g.beginPath(); g.arc(cx+2.3*z,cy-4.6*z,0.6*z,0,7); g.fill();                             // hand
+}
 function drawTradeMark(g,x,y,z,t){ g.fillStyle='#efe2c4';
   if(t===0){ g.beginPath();g.arc(x,y,1.5*z,0,7);g.fill(); g.fillStyle='#b5532f';g.beginPath();g.arc(x,y,0.7*z,0,7);g.fill(); }      // sake cup
   else if(t===1){ g.beginPath();g.ellipse(x,y,1*z,1.9*z,0.6,0,7);g.fill(); }                                                       // tea leaf
@@ -1523,7 +1537,9 @@ function drawTradeMark(g,x,y,z,t){ g.fillStyle='#efe2c4';
   else if(t===4){ for(let i=-1;i<=1;i++)g.fillRect(x+i*1.2*z-0.3*z,y-1.7*z,0.6*z,3.4*z); }                                          // rice grain
   else { g.fillRect(x-0.5*z,y-1.7*z,1*z,3.4*z); g.fillRect(x-1.7*z,y-0.5*z,3.4*z,1*z); } }                                          // medicine cross
 function drawStall(g,cx,cy,z,st){ const hh=TH/2*z; shadowEllipse(g,cx,cy+hh*0.3,TW*0.32,z); const tc=st.noren||'#b5532f', ph=11*z;
+  const _u=(cx-cam.x)/z,_v=(cy-cam.y)/z, WX=Math.round(_u/TW+_v/TH),WY=Math.round(_v/TH-_u/TW), vseed=Math.abs((WX*7+WY*11)|0);  // world-stable seed for the vendor's stable look
   g.fillStyle='#6a4a2a'; for(const[px,py]of [[-7,-2],[7,-2],[-7,3.5],[7,3.5]]) g.fillRect(cx+px*z-0.7*z,cy+py*z-ph,1.4*z,ph);
+  drawVendorFigure(g,cx-3*z,cy+0.2*z,z,SKIN[vseed%SKIN.length],KIM[(vseed+5)%KIM.length]);                                          // stallkeeper, drawn before the counter so it reads as standing behind it
   g.fillStyle='#8a6a3a'; g.fillRect(cx-8*z,cy+1*z,16*z,3*z); g.fillStyle='#6a4a28';g.fillRect(cx-8*z,cy+4*z,16*z,1.4*z);            // counter
   g.fillStyle='#a06a30';g.beginPath();g.arc(cx-4*z,cy+0.6*z,1.6*z,0,7);g.fill(); g.fillStyle=shade(tc,12);g.beginPath();g.arc(cx,cy+0.4*z,1.5*z,0,7);g.fill(); g.fillStyle='#caa23a';g.beginPath();g.arc(cx+4*z,cy+0.6*z,1.5*z,0,7);g.fill();
   const ay=cy-ph; g.fillStyle=tc; g.beginPath();g.moveTo(cx-9*z,ay+2*z);g.lineTo(cx+9*z,ay+2*z);g.lineTo(cx+7*z,ay-3.5*z);g.lineTo(cx-7*z,ay-3.5*z);g.closePath();g.fill();
@@ -1763,6 +1779,8 @@ function drawStallP(g,cx,cy,z,st){ const hh=TH/2*z, _u=(cx-cam.x)/z,_v=(cy-cam.y
   for(const[px,py] of [[-8,-2],[8,-2],[-8,3.5],[8,3.5]]){ const x=cx+px*z; ptWash(g,[[x-0.8*z,cy+py*z],[x+0.8*z,cy+py*z],[x+0.8*z,cy+py*z-ph],[x-0.8*z,cy+py*z-ph]], shade(post,22), shade(post,-18)); paintGrain(g,x,cy+py*z-ph,cy+py*z,z); }
   // counter plank
   ptWash(g,[[cx-9*z,cy+0.6*z],[cx+9*z,cy+0.6*z],[cx+9*z,cy+4.4*z],[cx-9*z,cy+4.4*z]], '#9a7440', '#6a4c28');
+  const vseed=Math.abs((seed*131)|0);
+  drawVendorFigure(g,cx-2.5*z,cy+0.6*z,z,SKIN[vseed%SKIN.length],KIM[(vseed+3)%KIM.length]);                          // stallkeeper standing behind the counter, fixed to the stall
   // goods: clay pots + rice bales + fish + woven basket
   ptBlob(g,cx-5.4*z,cy+0.6*z,1.9*z,2.2*z,'#b07a4a','#7c4f2c');          // clay pot
   ptBlob(g,cx-1.4*z,cy+0.7*z,2.1*z,1.8*z,'#cdb784','#9a8456');          // rice straw bale
@@ -1999,11 +2017,38 @@ function drawCivic(g,cx,cy,z,civ,era){ const E=ERAS[Math.min(era,4)];
   else if(civ===VALID){ g.fillStyle='#14f195'; g.fillRect(cx-5*z,top+4*z,10*z,1.6*z); g.fillRect(cx-3.4*z,top,1.8*z,7*z); g.fillRect(cx+1.6*z,top,1.8*z,7*z);} // torii
   else if(civ===PLANT){ g.fillStyle='#6a6a6a'; g.fillRect(cx+hw*0.3,cy-(styles[civ].h+8)*z,4*z,10*z); g.fillStyle='rgba(220,220,220,0.5)'; g.beginPath();g.arc(cx+hw*0.3+2*z,cy-(styles[civ].h+10)*z,4*z,0,7);g.fill();}
 }
-function drawFarmField(g,cx,cy,z){ const hw=TW/2*z,hh=TH/2*z; diamondPath(g,cx,cy,z); g.fillStyle=inkize('#b89150'); g.fill();
-  g.strokeStyle=inkize('#9a7338');g.lineWidth=0.84*z; for(let i=1;i<4;i++){const f=i/4;
+// crop full-colour accents at full bloom (mature/ready) — kept vivid like fire/blood, the rest of the
+// field stays in the inked tilled-soil tone so the crop colour is what reads as "alive" against it.
+const CROP_COLOR={ rice:'#e8e0a0', millet:'#d4b860', daikon:'#eef0e6', soy:'#7a9a4a', tea:'#3a6e44', eggplant:'#5a3a7a' };
+const CROP_LEAF ={ rice:'#7a9a4a', millet:'#6a8a3a', daikon:'#4a7a3e', soy:'#5a8a3a', tea:'#2a5234', eggplant:'#3a6a3a' };
+function drawFarmField(g,cx,cy,z,c){
+  const hw=TW/2*z,hh=TH/2*z, stage=(c&&c.stage)||0, crop=(c&&c.cropType)||'rice';
+  diamondPath(g,cx,cy,z); g.fillStyle=inkize('#b89150'); g.fill();
+  g.strokeStyle=inkize('#9a7338'); g.lineWidth=0.84*z;
+  for(let i=1;i<4;i++){ const f=i/4;                                          // tilled furrow lines — always visible, every stage
     g.beginPath();g.moveTo(cx-hw+hw*f,cy-hh+hh*f);g.lineTo(cx+hw*f,cy+hh*f-hh);g.stroke();
-    g.beginPath();g.moveTo(cx-hw*f,cy-hh*f+hh);g.lineTo(cx+hw-hw*f,cy+hh-hh*f);g.stroke();}
-  g.fillStyle=inkize('#7fae4a'); for(let i=0;i<8;i++){const a=inoise(i*3,i*7)*2-1,b=inoise(i*5,i*2)*2-1; g.fillRect(cx+a*hw*0.55,cy+b*hh*0.55,2*z,2*z);} }
+    g.beginPath();g.moveTo(cx-hw*f,cy-hh*f+hh);g.lineTo(cx+hw-hw*f,cy+hh-hh*f);g.stroke(); }
+  if(stage===0) return;                                                       // freshly tilled — bare soil only
+  const seed=c.seed;
+  if(stage===1){                                                              // seeded — faint dotted rows, no colour yet
+    g.fillStyle=inkize('#6a5a3a'); for(let i=0;i<8;i++){const a=vhash(seed,i*3)*2-1,b=vhash(seed,i*5+1)*2-1; g.fillRect(cx+a*hw*0.55,cy+b*hh*0.55,1.4*z,1.4*z);} return; }
+  if(stage===2){                                                              // sprout — small green shoots, still desaturated/inked
+    g.fillStyle=inkize(CROP_LEAF[crop]); for(let i=0;i<8;i++){const a=vhash(seed,i*3)*2-1,b=vhash(seed,i*5+1)*2-1;
+      const px=cx+a*hw*0.55, py=cy+b*hh*0.55; g.fillRect(px,py,1.6*z,2.6*z); } return; }
+  // stage 3 (mature) and 4 (ready): full crop, ready also gets a brighter colour pop to read as harvest-due
+  const pop = stage===4 ? 1 : 0.7;
+  g.fillStyle=CROP_LEAF[crop]; for(let i=0;i<8;i++){const a=vhash(seed,i*3)*2-1,b=vhash(seed,i*5+1)*2-1;
+    const px=cx+a*hw*0.55, py=cy+b*hh*0.55-1.6*z; g.fillRect(px,py,1.8*z,3.2*z); }       // stalk/leaf clusters
+  g.save(); g.globalAlpha=pop; g.fillStyle=CROP_COLOR[crop];
+  for(let i=0;i<8;i++){const a=vhash(seed,i*3)*2-1,b=vhash(seed,i*5+1)*2-1;
+    const px=cx+a*hw*0.55, py=cy+b*hh*0.55-3*z;
+    if(crop==='rice'||crop==='millet'){ g.beginPath();g.ellipse(px,py,1.3*z,2*z,0,0,7);g.fill(); }            // grain head
+    else if(crop==='daikon'){ g.beginPath();g.ellipse(px,py+2.6*z,1.6*z,1*z,0,0,7);g.fill(); }                 // pale root peeking at soil line
+    else if(crop==='soy'){ g.beginPath();g.ellipse(px,py,1*z,1.3*z,0,0,7);g.fill(); }                           // pod cluster
+    else if(crop==='tea'){ g.beginPath();g.arc(px,py-0.6*z,1.1*z,0,7);g.fill(); }                               // leaf bud
+    else { g.beginPath();g.ellipse(px,py,1.2*z,1.7*z,0.3,0,7);g.fill(); } }                                     // eggplant fruit
+  g.restore();
+}
 function drawPark(g,cx,cy,z){ const hw=TW/2*z,hh=TH/2*z; diamondPath(g,cx,cy,z); g.fillStyle='#4f9a52'; g.fill();
   g.strokeStyle='#3f8a4a';g.lineWidth=0.7*z; diamondPath(g,cx,cy,z*0.6); g.stroke();
   g.fillStyle='#8a6a3a'; g.fillRect(cx-1*z,cy-2*z,2*z,4*z); g.fillStyle='#2f6b34'; g.beginPath();g.ellipse(cx,cy-5*z,5*z,5*z,0,0,7);g.fill();
@@ -2335,11 +2380,12 @@ function drawAgent(g,cx,cy,z,a,noShadow){ if(!noShadow) shadowEllipse(g,cx,cy,a.
   if(a.kind==='cart') drawCart(g,cx,cy,z,a); else if(a.kind==='ronin') drawRonin(g,cx,cy,z,a,a.dir<0?-1:1);
   else if(a.kind==='animal') drawCritter(g,cx,cy,z,a,a.dir<0?-1:1);
   else if(a.kind==='prop') drawHumanProp(g,cx,cy,z,a);
-  else { const frozen=(a.act==='idle'||a.act==='temple'||a.act==='water'||a.watch>0);
+  else { const frozen=(a.act==='idle'||a.act==='temple'||a.act==='water'||a.act==='work'||a.watch>0);
     const posed=Object.assign({},a,{moving:a.moving&&!frozen});
     drawPerson(g,cx,cy,z,posed,a.dir<0?-1:1,a.scale||1);
     if(a.act==='temple') drawPrayerPose(g,cx,cy,z,a);
     else if(a.act==='water') drawWatersidePose(g,cx,cy,z,a);
+    else if(a.act==='work') drawTendingPose(g,cx,cy,z,a);
     else if(a.watch>0) drawWatchPose(g,cx,cy,z,a);
     else if(a.talkWith) drawTalkCue(g,cx,cy,z,a);
     else if(a.act==='idle'&&a.nerve===undefined) drawLookAroundCue(g,cx,cy,z,a);
@@ -2348,13 +2394,31 @@ function drawAgent(g,cx,cy,z,a,noShadow){ if(!noShadow) shadowEllipse(g,cx,cy,a.
 function drawPrayerPose(g,cx,cy,z,a){ g.save(); g.translate(cx,cy-7*z); g.rotate(0.16);
   g.fillStyle='rgba(20,16,10,0.5)'; g.beginPath(); g.ellipse(0,-1.2*z,1*z,1.6*z,0,0,7); g.fill();   // clasped hands, head dipped
   g.restore(); }
-/* idling at the water's edge — a held fishing line, or just sitting still gazing at the lake */
-function drawWatersidePose(g,cx,cy,z,a){ if(a.fishing===undefined)a.fishing=Math.random()<0.5;
+/* farmhand at work: a hoe rising/falling (till) or a hand sowing/watering — picked by a slow
+   phase cycle so the same figure cycles through both gestures rather than locking to one. */
+function drawTendingPose(g,cx,cy,z,a){ const dir=a.dir||1, ph=a.ph||0;
+  const cyc=(ph*0.5)%2; // 0-1 till swing, 1-2 sow/water dip
+  if(cyc<1){ const swing=Math.sin(cyc*Math.PI)*0.9;
+    g.strokeStyle='#5a4226'; g.lineWidth=0.6*z;
+    g.beginPath(); g.moveTo(cx+dir*1.6*z,cy-7*z); g.lineTo(cx+dir*(3.6+swing*2)*z,cy-2.5*z-swing*3*z); g.stroke();   // hoe handle
+    g.fillStyle='#7a7a7a'; g.beginPath(); g.ellipse(cx+dir*(3.6+swing*2)*z,cy-2.2*z-swing*3*z,1*z,0.5*z,0,0,7); g.fill();
+    if(swing>0.7){ g.fillStyle='rgba(120,100,70,0.4)'; g.beginPath(); g.ellipse(cx+dir*4*z,cy+0.4*z,1.6*z,0.6*z,0,0,7); g.fill(); } // soil kick-up at swing peak
+  } else { const dip=Math.sin((cyc-1)*Math.PI)*0.7;
+    g.fillStyle='rgba(20,16,10,0.45)'; g.beginPath(); g.ellipse(cx+dir*2.4*z,cy-3*z+dip*2*z,0.9*z,1.1*z,0,0,7); g.fill();      // hand reaching down to sow/water
+    if(dip>0.5){ g.fillStyle='rgba(120,150,170,0.3)'; g.beginPath(); g.ellipse(cx+dir*2.6*z,cy-0.4*z,1.2*z,0.5*z,0,0,7); g.fill(); } } // water droplet glint
+}
+/* idling at the water's edge — a held fishing line (with an occasional catch), or just sitting still gazing at the lake */
+function drawWatersidePose(g,cx,cy,z,a){
   if(a.fishing){ g.strokeStyle='#6a4a2a'; g.lineWidth=0.4*z; const dir=a.dir||1;
     g.beginPath(); g.moveTo(cx+dir*2.4*z,cy-7*z); g.lineTo(cx+dir*7*z,cy-9.5*z); g.stroke();        // rod
+    const bob=a.caughtT!==undefined?Math.sin((a.ph||0)*9)*0.6*z:0;                                  // line jitters when a fish is on
     g.strokeStyle='rgba(220,228,232,0.55)'; g.lineWidth=0.18*z;
-    g.beginPath(); g.moveTo(cx+dir*7*z,cy-9.5*z); g.lineTo(cx+dir*6.4*z,cy+1.5*z); g.stroke(); }     // line into the water
+    g.beginPath(); g.moveTo(cx+dir*7*z,cy-9.5*z); g.lineTo(cx+dir*6.4*z+bob,cy+1.5*z); g.stroke();   // line into the water
+    if(a.caughtT!==undefined){ g.fillStyle=a.caught||FISH[0];                                       // small caught-fish glimpse at the line tip
+      g.beginPath(); g.ellipse(cx+dir*6.4*z+bob,cy+1.2*z,0.9*z,0.45*z,dir*0.4,0,7); g.fill(); }
+  }
 }
+
 /* a faint glance-around motion cue for an idling pedestrian — keeps "idle" from reading as "frozen" */
 function drawLookAroundCue(g,cx,cy,z,a){ const s=Math.sin((a.ph||0)*0.6)*0.5*z;
   g.fillStyle='rgba(255,255,255,0.06)'; g.beginPath(); g.ellipse(cx+s,cy-9.3*z,1.1*z,0.6*z,0,0,7); g.fill(); }
@@ -2377,11 +2441,10 @@ function drawNervousCue(g,cx,cy,z,a){ g.fillStyle='rgba(40,20,10,0.18)'; g.begin
 function drawRespectCue(g,cx,cy,z,a){ g.save(); g.translate(cx,cy-8.8*z); g.rotate(0.22);
   g.fillStyle='rgba(20,16,10,0.24)'; g.beginPath(); g.ellipse(0,-0.6*z,1*z,1.2*z,0,0,7); g.fill();
   g.restore(); }
-/* small standing groups that appear to talk: pair up nearby idling residents/peds for a few seconds.
+/* small standing groups that appear to talk: pair up nearby idling residents for a few seconds.
    Purely cosmetic — never touches movement targets, economy, or simulation state. */
 function syncGroupTalk(){ const idlers=[];
   for(const r of residents) if(!r.claimed&&!(r.flee>0)&&r.pause>0&&r.act!=='temple'&&r.act!=='water')idlers.push(r);
-  for(const a of traffic) if(a.kind==='ped'&&!a.claimed&&!(a.flee>0)&&a.act==='idle')idlers.push(a);
   for(const u of idlers)u.talkWith=null;
   for(let i=0;i<idlers.length;i++){ const u=idlers[i]; if(u.talkWith)continue;
     for(let j=i+1;j<idlers.length;j++){ const v=idlers[j]; if(v.talkWith)continue;
@@ -2844,7 +2907,6 @@ function rebuildWorld(){ const z=cam.zoom;
     if(cx<-TW*z||cx>VW+TW*z||cy<-TH*z*6||cy>VH+TH*z*2)continue;
     drawTerrain(gctx,tx,ty,c,cx,cy,z,fx);
     if(c.road)drawRoad(gctx,tx,ty,cx,cy,z,c.br);
-    if(c.civ===FARM)drawFarmField(gctx,cx,cy,z);
     if(c.civ===PARK)drawPark(gctx,cx,cy,z);
     if(S.overlay&&valueGrid&&(c.zone||c.civ)){ diamondPath(gctx,cx,cy,z); gctx.fillStyle=valColor(valueGrid[ty][tx]); gctx.fill(); }
   }
@@ -2928,9 +2990,11 @@ function render(){ ctx.setTransform(DPR,0,0,DPR,0,0);
           if(vs) acts.push({tx,ty,k:'veg',vs,d:S}); }
         if(c.ruin)acts.push({tx,ty,k:'ruin',c,d:S});
         else if(c.zone)acts.push({tx,ty,k:'z',c,d:S});
-        if(c.civ&&c.civ!==FARM&&c.civ!==PARK)acts.push({tx,ty,k:'c',civ:c.civ,d:S}); } } }
+        if(c.civ===FARM)acts.push({tx,ty,k:'farm',c,d:S});
+        else if(c.civ&&c.civ!==PARK)acts.push({tx,ty,k:'c',civ:c.civ,d:S}); } } }
   for(const u of traffic){ if(u.claimed)continue; acts.push({tx:u.wx,ty:u.wy,k:'a',a:u,d:u.wx+u.wy}); }
   for(const u of residents){ if(u.claimed)continue; acts.push({tx:u.x,ty:u.y,k:'a',a:u,d:u.x+u.y}); }
+  for(const h of farmHands) acts.push({tx:h.x,ty:h.y,k:'a',a:h,d:h.x+h.y});
   for(const e of encounters)for(const m of e.mob) if(m.state!=='down') acts.push({tx:m.x,ty:m.y,k:'a',a:m,d:m.x+m.y});
   if(kaiju&&kaiju.militia) for(const m of kaiju.militia) if(m.state!=='down') acts.push({tx:m.x,ty:m.y,k:'a',a:m,d:m.x+m.y});
   for(const p of decay) if(p.kind==='prop') acts.push({tx:p.x,ty:p.y,k:'a',a:p,d:p.x+p.y});   // seated beggars / musicians / fortune-tellers
@@ -2944,6 +3008,7 @@ function render(){ ctx.setTransform(DPR,0,0,DPR,0,0);
     else if(o.k==='veg')drawVeg(octx,cx,cy,z,grid[o.ty][o.tx].seed,o.vs);
     else if(o.k==='ruin')drawRuin(octx,cx,cy,z,o.c&&o.c.scorch);
     else if(o.k==='z')drawZoneBuilding(octx,cx,cy,z,o.c);
+    else if(o.k==='farm')drawFarmField(octx,cx,cy,z,o.c);
     else if(o.k==='c')drawCivic(octx,cx,cy,z,o.civ,S.era);
     else { drawAgent(octx,cx,cy,z,o.a); drawAgent(actx,cx,cy,z,o.a,true); }   // colour+occlusion / fine-ink source (no shadow)
     drew=true; }
@@ -3029,6 +3094,7 @@ const CART_TYPES=['ox','kago','hand'], PED_TYPES=['kimono','monk','porter'];
 const KIM=['#b23b3b','#3b5fb2','#caa24a','#7a3ba0','#3b8a5a','#c0653a','#2f6b8a','#9a4a6a','#46708f','#8a8f3a','#a23c6a','#5a4a8a','#c08a3a','#357a6a','#b0506a','#406a4a','#8a3a3a','#2a4a7a','#6a5a2a','#4a6a8a','#7a4a3a','#3a6a5a','#9a6a4a','#5a3a6a','#b07a5a','#2f5a4a'];
 const OBI=['#e8c24a','#c0392b','#2c3e6a','#3f8a4a','#efe2c4','#7a2d6a','#1f6a5a','#d4843a','#3a3f6a','#9a3a2a','#b08a2a','#5a2d4a','#2a5a4a','#8a4a2a','#d0c0a0','#6a3a5a'];
 const SKIN=['#ecc9a0','#e3bd92','#d8ad82','#f0d2ab','#cfa074','#e8c69a','#c89a6e','#dab488','#bd8c60'];
+const FISH=['#c0392b','#e8c24a','#46708f','#9a8f3a','#7a3ba0'];   // stand-in koi/ayu/funa colors for a caught-fish icon at the rod tip
 const RONIN_ROBE=['#2c2a30','#332a26','#26302c','#3a2c2c','#2a2c36','#383228','#241e28','#2e342e','#34241e','#28282e'];   // desaturated, dirtier than villager KIM
 const RONIN_OBI=['#3a2230','#2a2418','#402418','#1e2a28','#34201c','#241c2a','#2c2818','#3a1c1c'];
 const RONIN_HEADGEAR=['none','none','hachimaki','kasa','shave','topknot','menpo'];   // weighted toward bare/topknot via repeats; menpo (half-mask) rarer, reads as a hardened veteran
@@ -3090,19 +3156,108 @@ function roadDirs(x,y){const d=[];for(const[dx,dy]of NEIGH)if(isRoadAt(x+dx,y+dy
 function respawnAgent(a){ if(!roadList.length)return false; for(let t=0;t<14;t++){const r=roadList[(Math.random()*roadList.length)|0],dirs=roadDirs(r[0],r[1]);
   if(dirs.length){const d=dirs[(Math.random()*dirs.length)|0];a.x=r[0];a.y=r[1];a.tx=r[0]+d[0];a.ty=r[1]+d[1];a.dx=d[0];a.dy=d[1];a.p=0;return true;}}return false; }
 function syncTraffic(){ roadList=[]; for(let y=0;y<H;y++)for(let x=0;x<W;x++)if(grid[y][x].road)roadList.push([x,y]);
-  // population scales with road network AND with developed city size (more buildings = more people on the street)
-  const target=Math.min(54,Math.floor(roadList.length/3)+Math.floor(devTileCount()/6));
-  while(traffic.length<target){const cartish=Math.random()<0.42; const v=Math.random();
-    const a= cartish
-      ? {kind:'cart',type:CART_TYPES[(Math.random()*3)|0],spd:0.4+Math.random()*0.8,col:KIM[(Math.random()*KIM.length)|0],obi:OBI[(Math.random()*OBI.length)|0],ph:Math.random()*6,dir:1,wx:0,wy:0,v,hat:null,acc:null}
-      : Object.assign({kind:'ped',spd:0.4+Math.random()*0.8,ph:Math.random()*6,dir:1,wx:0,wy:0,act:'walk',actT:0,pauseT:0,talkWith:null}, pedKit());
-    if(!respawnAgent(a))break; traffic.push(a);} if(traffic.length>target)traffic.length=target; syncResidents(); }
+  // cart/vehicle traffic only — pedestrian citizens now come exclusively from residents[] (purposeful
+  // home/work/leisure agents). Carts stay ambient/cosmetic since they aren't citizens.
+  const target=Math.min(28,Math.floor(roadList.length/6)+Math.floor(devTileCount()/10));
+  while(traffic.length<target){ const v=Math.random();
+    const a={kind:'cart',type:CART_TYPES[(Math.random()*3)|0],spd:0.4+Math.random()*0.8,col:KIM[(Math.random()*KIM.length)|0],obi:OBI[(Math.random()*OBI.length)|0],ph:Math.random()*6,dir:1,wx:0,wy:0,v,hat:null,acc:null};
+    if(!respawnAgent(a))break; traffic.push(a);}
+  if(traffic.length>target){ // trim from the regular (non-laden) pool only — harvest carts are one-shot and must finish their delivery
+    let over=traffic.length-target;
+    for(let i=traffic.length-1;i>=0&&over>0;i--){ if(!traffic[i].laden){ traffic.splice(i,1); over--; } } }
+  syncResidents(); }
 /* count developed/civic tiles — drives population scaling so a bigger city visibly has more street life */
 function devTileCount(){ let n=0; for(let y=0;y<H;y++)for(let x=0;x<W;x++){const c=grid[y][x]; if(c.dev>0||c.civ)n++;} return n; }
+/* ---- farm groups: flood-fill connected FARM tiles, chunk into groups of 3 (remainder folds
+   into the last group of its cluster), one crop type per group, seeded so it's stable across
+   rebuilds. Recomputed only when gridVersion changes (cheap: farm tiles are rare). ---- */
+function buildFarmGroups(){
+  const seen=new Set(), groups=[]; let gid=0;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){ const c=grid[y][x]; if(c.civ!==FARM)continue; const k=x+','+y; if(seen.has(k))continue;
+    // BFS the connected farm cluster
+    const cluster=[]; const stack=[[x,y]]; seen.add(k);
+    while(stack.length){ const[cx,cy]=stack.pop(); cluster.push([cx,cy]);
+      for(const[dx,dy]of NEIGH){ const nx=cx+dx,ny=cy+dy; if(!inB(nx,ny))continue; const nk=nx+','+ny; if(seen.has(nk))continue;
+        if(grid[ny][nx].civ===FARM){ seen.add(nk); stack.push([nx,ny]); } } }
+    // chunk the cluster into groups of 3 plots (remainder <3 merges into the previous chunk, or stands alone if it's the only chunk)
+    for(let i=0;i<cluster.length;i+=3){
+      let tiles=cluster.slice(i,i+3);
+      if(tiles.length<3 && groups.length && groups[groups.length-1].clusterId===gid){ groups[groups.length-1].tiles.push(...tiles); continue; }
+      const seed=vhash(tiles[0][0]*13+tiles[0][1]*7,gid*3.1);
+      groups.push({id:gid++, clusterId:gid, tiles, crop:CROP[(seed*CROP.length)|0]});
+    }
+  }
+  _farmGroups=groups; _farmGroupsVer=gridVersion;
+  // stamp group/crop refs onto tiles + init grow-state fields if missing
+  for(const grp of groups) for(const[tx,ty]of grp.tiles){ const c=grid[ty][tx];
+    c.cropGrp=grp.id; c.cropType=grp.crop; if(c.stage==null){c.stage=0;c.stageT=0;} }
+  return groups;
+}
+function farmGroups(){ if(_farmGroupsVer!==gridVersion) buildFarmGroups(); return _farmGroups; }
+/* ---- farm growth: advances tilled->seeded->sprout->mature->ready on real elapsed time (dt),
+   independent of the 1.5s tick(). A group is "ready" once every tile in it reaches stage 4;
+   harvest collapses the whole group back to stage 0 and spawns one delivery cart. ---- */
+const farmHands=[]; // one tending worker per farm group; parked on a field tile, pose follows group stage
+function syncFarmHands(){
+  const groups=farmGroups();
+  // drop hands whose group no longer exists
+  for(let i=farmHands.length-1;i>=0;i--) if(!groups.some(g=>g.id===farmHands[i].grp)) farmHands.splice(i,1);
+  for(const grp of groups){ if(farmHands.some(h=>h.grp===grp.id)) continue;
+    const[tx,ty]=grp.tiles[0];                                   // deterministic: the tile the player actually placed/sees, not a random pick
+    const kit=pedKit(); kit.acc='hoe'; kit.hat='kasa';
+    farmHands.push(Object.assign({grp:grp.id,x:tx+0.15,y:ty+0.1,tx,ty,ph:Math.random()*6,dir:1,moving:false,act:'work',scale:1}, kit));
+  }
+}
+function updateFarmHands(dt){ for(const h of farmHands){ h.ph+=dt*2.2;
+  // relocate onto the group's current lowest-stage tile so the worker visibly tends whichever
+  // patch still needs attention (till->sow->sprout); once everything's mature/ready they idle.
+  // SNAP rather than lerp: group tiles aren't guaranteed collinear/adjacent (BFS-chunked), so
+  // interpolating x/y in a straight line can cut diagonally across tiles that aren't actually
+  // between the two field plots on screen, visually crossing through unrelated ground.
+  const grp=_farmGroups&&_farmGroups.find(g=>g.id===h.grp); if(!grp)continue;
+  let lo=4,lt=null; for(const[tx,ty]of grp.tiles){ const c=grid[ty]&&grid[ty][tx]; if(c&&c.stage<lo){lo=c.stage;lt=[tx,ty];} }
+  if(lt){ h.tx=lt[0]+0.15; h.ty=lt[1]+0.1; h.x=h.tx; h.y=h.ty; }
+  h.act = lo>=3?'idle':'work'; h.moving=false; } }
+function updateFarms(dt){
+  const groups=farmGroups(); if(!groups.length)return;
+  syncFarmHands(); updateFarmHands(dt);
+  for(const grp of groups){
+    let allReady=true;
+    for(const[tx,ty]of grp.tiles){ const c=grid[ty][tx]; if(!c||c.civ!==FARM)continue;
+      if(c.stage<4){ c.stageT+=dt; if(c.stageT>=FARM_STAGE_T[c.stage]){ c.stageT=0; c.stage++; } allReady=false; }
+    }
+    if(allReady && !grp.harvesting){ grp.harvesting=true; harvestFarmGroup(grp); }
+  }
+}
+/* ---- harvest: reset the group's tiles to freshly-tilled soil, then hand the crop off to the
+   existing hand-cart agent (reused as-is, just laden+spawned at the field) which wanders the
+   road network like any other cart and quietly delivers (despawns near a MARKET tile). ---- */
+function harvestFarmGroup(grp){
+  const[fx,fy]=grp.tiles[0];
+  for(const[tx,ty]of grp.tiles){ const c=grid[ty][tx]; if(c&&c.civ===FARM){ c.stage=0; c.stageT=0; } }
+  grp.harvesting=false;
+  // find the nearest road tile to the field itself — cart starts its wander from there, laden
+  let start=null,bd=1e9;
+  for(let r=0;r<8&&!start;r++)for(let j=-r;j<=r;j++)for(let i=-r;i<=r;i++){ const nx=fx+i,ny=fy+j;
+    if(Math.abs(i)+Math.abs(j)!==r)continue; if(inB(nx,ny)&&grid[ny][nx].road){start=[nx,ny];break;} }
+  if(!start) return; // no road reachable — nothing to spawn, crop simply sat unharvested-looking but resets silently
+  const dirs0=roadDirs(start[0],start[1]); if(!dirs0.length)return;
+  const d0=dirs0[(Math.random()*dirs0.length)|0];
+  const cart={kind:'cart',type:'hand',spd:0.5+Math.random()*0.3,col:KIM[(Math.random()*KIM.length)|0],obi:OBI[(Math.random()*OBI.length)|0],
+    ph:Math.random()*6,dir:1,x:start[0],y:start[1],tx:start[0]+d0[0],ty:start[1]+d0[1],dx:d0[0],dy:d0[1],p:0,wx:start[0],wy:start[1],
+    laden:true,cropType:grp.crop,deliverT:0};
+  traffic.push(cart);
+  toast('🌾 Harvest', CROP_NAME[grp.crop]+' brought to market');
+}
+const CROP_NAME={rice:'Rice',millet:'Millet',daikon:'Daikon',soy:'Soybeans',tea:'Tea',eggplant:'Eggplant'};
+
 function updateTraffic(dt){ for(const a of traffic){ if(a.claimed)continue; if(a.flee>0)a.flee-=dt;
     if(a.watch>0){ a.watch-=dt; if(a.watch<=0)a.watch=undefined; }
+    // ---- laden harvest cart: once it wanders within 2 tiles of any MARKET, deliver + despawn ----
+    if(a.laden){ for(let j=-2;j<=2;j++)for(let i=-2;i<=2;i++){ const nx=(a.wx|0)+i,ny=(a.wy|0)+j;
+      if(inB(nx,ny)&&grid[ny][nx].civ===MARKET){ a.delivered=true; break; } } if(a.delivered){ a.ph+=dt*7; continue; } }
     // ---- nervousness near a ronin warband passing through (ambient, separate from active raid flee) ----
-    // most townsfolk are simply wary; a minority instead show deference — a brief respectful
+    // cart drivers are simply wary; a minority instead show deference — a brief respectful
     // pause/bow rather than a fearful one. Decided once when the ronin first come into range so
     // the same figure doesn't flicker between the two readings every frame.
     if(!(a.flee>0)){ for(const e of encounters){ if(!e.mob)continue; for(const m of e.mob){ const dd=Math.hypot(m.x-a.x,m.y-a.y);
@@ -3110,17 +3265,14 @@ function updateTraffic(dt){ for(const a of traffic){ if(a.claimed)continue; if(a
     else { a.nerve=undefined; a.respectful=undefined; }
     // ---- watching a nearby disturbance: frozen in place (too far to panic, close enough to stare) ----
     if(a.watch>0){ a.ph+=dt*1.5; continue; }
-    // ---- idle/look-around/rest pause behavior on ordinary foot traffic (skip carts) ----
-    if(a.kind==='ped'&&!(a.flee>0)){
-      if(a.act==='idle'){ a.actT-=dt; if(a.actT<=0){a.act='walk';} a.ph+=dt*2; continue; }
-    }
     a.p+=dt*a.spd*(a.flee>0?2.3:1);
   if(a.p>=1){a.x=a.tx;a.y=a.ty;a.p=0; if(!isRoadAt(a.x,a.y)){respawnAgent(a);continue;}
-    // occasionally a pedestrian pauses to look around or rest before moving on (not while fleeing)
-    if(a.kind==='ped'&&!(a.flee>0)&&a.act!=='idle'&&Math.random()<0.05){ a.act='idle'; a.actT=1.2+Math.random()*2.2; continue; }
     let dirs=roadDirs(a.x,a.y).filter(d=>!(d[0]===-a.dx&&d[1]===-a.dy)); if(!dirs.length)dirs=roadDirs(a.x,a.y); if(!dirs.length){respawnAgent(a);continue;}
     const d=dirs[(Math.random()*dirs.length)|0];a.dx=d[0];a.dy=d[1];a.tx=a.x+d[0];a.ty=a.y+d[1]; if(!isRoadAt(a.tx,a.ty))respawnAgent(a);}
-  a.wx=a.x+(a.tx-a.x)*a.p; a.wy=a.y+(a.ty-a.y)*a.p; a.dir=(a.tx-a.x)-(a.ty-a.y)<0?-1:1; a.ph+=dt*7; } }
+  a.wx=a.x+(a.tx-a.x)*a.p; a.wy=a.y+(a.ty-a.y)*a.p; a.dir=(a.tx-a.x)-(a.ty-a.y)<0?-1:1; a.ph+=dt*7; }
+  // sweep out delivered carts (was a forced respawn into the general pool — these are one-shot, so they leave instead)
+  for(let i=traffic.length-1;i>=0;i--) if(traffic[i].laden&&traffic[i].delivered) traffic.splice(i,1);
+}
 const residents=[];
 function findWork(hx,hy){ let best=null,bd=1e9; for(let y=0;y<H;y++)for(let x=0;x<W;x++){const c=grid[y][x];
   const work=(c.zone===ZC||c.zone===ZI)&&c.dev>0, civ=c.civ&&c.civ!==FARM&&c.civ!==PARK;
@@ -3135,16 +3287,21 @@ function nearestWaterEdge(hx,hy){ let best=null,bd=1e9;
 /* nearest temple/shrine tile — used for the "pray near temples" behavior (middle ages onward) */
 function nearestTemple(hx,hy){ let best=null,bd=1e9;
   for(let y=0;y<H;y++)for(let x=0;x<W;x++){ if(grid[y][x].civ===TEMPLE){const d=Math.abs(x-hx)+Math.abs(y-hy); if(d<bd&&d<28){bd=d;best=[x,y];}} } return best; }
+const TRAITS=['brisk','chatty','devout','angler','idler'];                          // persistent per-resident personality, rolled once at spawn
 function syncResidents(){ const homes=[]; for(let y=0;y<H;y++)for(let x=0;x<W;x++){const c=grid[y][x]; if(c.zone===ZR&&c.dev>0||c.civ===TOWN)homes.push([x,y]); }
-  // population scales with the number of homes AND overall city development, with a higher ceiling
-  // so a large, mature city visibly feels denser with street life than a small early settlement.
-  const target=Math.min(110,Math.max(homes.length,Math.floor(devTileCount()/4)));
+  // population scales with homes/development first — road network only adds DENSITY on top of an
+  // already-settled town (more foot traffic per home as the city fills in), it can never invent
+  // citizens for a long empty road. This pool now covers ALL pedestrian citizens, including what
+  // used to be ambient traffic[] filler — every figure on the street has a home, and either a
+  // workplace, a leisure habit, or both; none of them wander without a reason.
+  const densityBonus=1+Math.min(0.6,roadList.length/900);   // up to +60% once the road network is substantial
+  const target=Math.min(110,Math.round(Math.max(homes.length*0.85,devTileCount()*0.25)*densityBonus));
   if(residents.length>target)residents.length=target;
   while(residents.length<target&&homes.length){const h=homes[(Math.random()*homes.length)|0]; const work=findWork(h[0],h[1]);
     const kit=pedKit(); const carrying=kit.type!=='child'&&Math.random()<0.3;
     if(carrying&&!kit.acc) kit.acc=['basket','box','yoke'][(Math.random()*3)|0];
     residents.push(Object.assign({home:h,work,goal: work?'out':'home', ax:h[0],ay:h[1],x:h[0]+(Math.random()-0.5),y:h[1]+(Math.random()-0.5),tx:h[0],ty:h[1],
-      spd:0.7+Math.random()*0.7,ph:Math.random()*6,pause:Math.random()*4,kind:'ped',dir:1,moving:false,act:'walk'}, kit));}
+      spd:0.9+Math.random()*0.6,ph:Math.random()*6,pause:Math.random()*2,kind:'ped',dir:1,moving:false,act:'walk',trait:TRAITS[(Math.random()*TRAITS.length)|0]}, kit));}
   for(const r of residents){const c=grid[r.home[1]]&&grid[r.home[1]][r.home[0]];
     if(!c||!(c.zone===ZR&&c.dev>0||c.civ===TOWN)){if(homes.length){r.home=homes[(Math.random()*homes.length)|0];r.work=findWork(r.home[0],r.home[1]);r.x=r.home[0];r.y=r.home[1];r.goal='home';}}
     else if(!r.work)r.work=findWork(r.home[0],r.home[1]); } }
@@ -3154,7 +3311,11 @@ function updateResidents(dt){ const tod=(typeof ENV!=='undefined')?ENV.t:0.4; co
     if(!(r.flee>0)){ let near=false; for(const e of encounters){ if(!e.mob)continue; for(const m of e.mob){ if(Math.hypot(m.x-r.x,m.y-r.y)<2.6){near=true;break;} } if(near)break; }
       if(near){ if(r.nerve===undefined){ r.nerve=Math.random(); r.respectful=Math.random()<0.22; } } else { r.nerve=undefined; r.respectful=undefined; } }
     if(r.watch>0){ r.watch-=dt; if(r.watch<=0)r.watch=undefined; else { r.moving=false; r.ph+=dt*1.5; continue; } } // watching a nearby disturbance — frozen, staring
-    if(r.pause>0){ r.pause-=dt; r.moving=false; if(r.act==='water'||r.act==='temple')r.ph+=dt*1.5; continue; }
+    if(r.pause>0){ r.pause-=dt; r.moving=false;
+      if(r.act==='water'||r.act==='temple')r.ph+=dt*1.5;
+      if(r.act==='water'&&r.fishing&&!r.caught&&r.pause<=r.pause0*0.55&&Math.random()<0.35*dt){ r.caught=FISH[(Math.random()*FISH.length)|0]; r.caughtT=2; } // bite partway through the sit
+      if(r.caughtT!==undefined){ r.caughtT-=dt; if(r.caughtT<=0)r.caughtT=undefined; }
+      continue; }
     // choose destination: commute to work by day, leisure detour or home otherwise
     let dest;
     if(r.work && r.goal==='out' && dayTime){ dest=r.work; }
@@ -3164,10 +3325,16 @@ function updateResidents(dt){ const tod=(typeof ENV!=='undefined')?ENV.t:0.4; co
     const dx=gx-r.x, dy=gy-r.y, d=Math.hypot(dx,dy);
     if(d<0.18){ r.moving=false;
       if(r.goal==='out'){ r.pause=2+Math.random()*3; r.goal='home'; }      // worked a shift, head home
-      else if(r.goal==='leisure'){ r.act=r.leisureAct||'idle'; r.pause=3+Math.random()*4; r.goal='home'; r.leisureSpot=null; } // arrived at the water/temple — pause there a while
-      else { r.act='walk'; r.pause=1.5+Math.random()*3; r.jx=(Math.random()-0.5)*1.2; r.jy=(Math.random()-0.5)*1.2;
-        const tookLeisure = dayTime && Math.random()<0.12 && (()=>{                 // a brief leisure detour before/instead of work or staying home
-          const wantTemple=(typeof S!=='undefined'&&S.era>=3)&&Math.random()<0.5;
+      else if(r.goal==='leisure'){ r.act=r.leisureAct||'idle';
+        if(r.act==='water'){ r.fishing=Math.random()<0.6; r.caught=undefined; r.caughtT=undefined;
+          r.pause=(r.trait==='angler'?20:14)+Math.random()*22; }                 // sit 14-36s (anglers linger longer) — a real fishing session, not a blink
+        else { r.pause=3+Math.random()*4; }
+        r.pause0=r.pause; r.goal='home'; r.leisureSpot=null; }                  // arrived at the water/temple — pause there a while
+      else { r.act=Math.random()<0.4?'idle':'walk'; const pauseScale=r.trait==='brisk'?0.5:(r.trait==='chatty'?1.5:1);
+        r.pause=(0.6+Math.random()*1.2)*pauseScale; r.jx=(Math.random()-0.5)*1.2; r.jy=(Math.random()-0.5)*1.2;
+        const tookLeisure = dayTime && r.trait!=='brisk' && Math.random()<0.12 && (()=>{                 // a brief leisure detour before/instead of work or staying home
+          const wantTemple=r.trait==='devout'?((typeof S!=='undefined'&&S.era>=3)) : r.trait==='angler'? false :
+            (typeof S!=='undefined'&&S.era>=3)&&Math.random()<0.5;
           const spot = wantTemple ? nearestTemple(r.home[0],r.home[1]) : nearestWaterEdge(r.home[0],r.home[1]);
           if(!spot)return false; r.leisureSpot=spot; r.leisureAct=wantTemple?'temple':'water'; r.goal='leisure'; r.pause=0; return true; })();
         if(!tookLeisure){ if(dayTime&&r.work)r.goal='out'; } }
@@ -3480,7 +3647,6 @@ function decayScar(dt){ if(!scarGrid)return; const k=Math.pow(0.97,dt*60);   // 
 function rollOutcome(){ const r=Math.random(); if(r<0.65)return'flee'; if(r<0.87)return'mug'; return'lethal'; }
 function vpos(v){ return [v.wx!=null?v.wx:v.x, v.wy!=null?v.wy:v.y]; }
 function pickVictim(){ const pool=[];   // wandering adult civilian — never a child
-  for(const a of traffic) if(a.kind==='ped'&&a.type!=='child'&&!a.claimed)pool.push(a);
   for(const r of residents) if(r.moving&&r.type!=='child'&&!r.claimed)pool.push(r);
   return pool.length?pool[(Math.random()*pool.length)|0]:null; }
 
@@ -3545,10 +3711,6 @@ function applyRaid(e){ const c=grid[e.rty]&&grid[e.rty][e.rtx]; if(!c)return;
     if(typeof toast==='function')toast('🔥 Torched','charred bodies in the embers'); } }
 
 function scatterWitnesses(vx,vy){
-  for(const a of traffic) if(a.kind==='ped'&&!a.claimed){ const d=Math.hypot((a.wx!=null?a.wx:a.x)-vx,(a.wy!=null?a.wy:a.y)-vy);
-    if(d<3.5){ a.flee=Math.max(a.flee||0,1.8); a.watch=undefined; }
-    else if(d<6.5&&!(a.flee>0)){ a.watch=Math.max(a.watch||0,3+Math.random()*2); }  // too far to panic, close enough to stop and stare
-  }
   for(const r of residents) if(!r.claimed){ const d=Math.hypot(r.x-vx,r.y-vy);
     if(d<3.5){ r.flee=Math.max(r.flee||0,1.8); r.watch=undefined; }
     else if(d<6.5&&!(r.flee>0)){ r.watch=Math.max(r.watch||0,3+Math.random()*2); }
@@ -3557,10 +3719,6 @@ function scatterWitnesses(vx,vy){
 /* same flee/watch mechanics as scatterWitnesses, wider radii — for the single loudest beat in a
    raid (a structure actually coming down), which reads further across the street than the breach itself */
 function scatterWitnessesWide(vx,vy){
-  for(const a of traffic) if(a.kind==='ped'&&!a.claimed){ const d=Math.hypot((a.wx!=null?a.wx:a.x)-vx,(a.wy!=null?a.wy:a.y)-vy);
-    if(d<5){ a.flee=Math.max(a.flee||0,2.0); a.watch=undefined; }
-    else if(d<9&&!(a.flee>0)){ a.watch=Math.max(a.watch||0,3.5+Math.random()*2); }
-  }
   for(const r of residents) if(!r.claimed){ const d=Math.hypot(r.x-vx,r.y-vy);
     if(d<5){ r.flee=Math.max(r.flee||0,2.0); r.watch=undefined; }
     else if(d<9&&!(r.flee>0)){ r.watch=Math.max(r.watch||0,3.5+Math.random()*2); }
@@ -4531,7 +4689,7 @@ function buildPalette(){ const el=document.getElementById('builds'); el.innerHTM
     const co=document.createElement('div');co.className='cost';co.textContent='$'+it.cost;d.appendChild(co);
     if(locked){const lk=document.createElement('div');lk.className='lk';lk.textContent='🔒';d.appendChild(lk);}
     d.onclick=()=>{ if(locked){advise('That needs the '+ERAS[it.era].nm+' age.');return;}
-      playUISfx('click');
+      playUISfx('click',0.5);
       S.tool=it;S.hand=false;S.douse=false;S.demo=false;S.pillage=false;S.arson=false; ['handBtn','douseBtn','demoBtn','pillageBtn','arsonBtn'].forEach(b=>document.getElementById(b).classList.remove('on'));
       markSel(); cv.style.cursor='crosshair'; };
     el.appendChild(d);} markSel(); }
@@ -4547,8 +4705,8 @@ function place(tx,ty){ if(!inB(tx,ty))return; const c=grid[ty][tx]; gridVersion+
     if(c.own&&c.own!==CLIENT){ toast('Not yours','use PILLAGE on rivals',true); return; }
     if(!(c.zone||c.civ||c.dev||c.road||c.wire||c.ruin)){ return; } // nothing to raze here
     if(!spend(500))return;                                       // 500 $SORU burned — cleanup tool
-    c.zone=0;c.civ=0;c.dev=0;c.own=0;c.wire=0;c.blight=0;c.ruin=0;c.burn=0;c.guard=0;c.scorch=0; if(c.road)c.road=0;
-    syncTraffic(); rebuildCoverage(); refreshHUD(); playUISfx('raze'); return; }
+    c.zone=0;c.civ=0;c.dev=0;c.own=0;c.wire=0;c.blight=0;c.ruin=0;c.burn=0;c.guard=0;c.scorch=0; c.stage=null;c.stageT=0;c.cropGrp=null;c.cropType=null; if(c.road)c.road=0;
+    syncTraffic(); rebuildCoverage(); refreshHUD(); playUISfx('raze',0.6); return; }
   if(S.douse){ if(c.burn){c.burn=0; for(const[dx,dy]of NEIGH){const n=grid[ty+dy]&&grid[ty+dy][tx+dx];if(n&&n.burn)n.burn=Math.max(0,n.burn-2);} toast('💧 Doused');} return; }
   if(S.guard){ const mine=(c.dev>0&&c.own===CLIENT)||(c.civ&&c.civ!==TOWN);
     if(!mine){ toast('Guard your own','shield a building you own',true); return; }
@@ -4570,13 +4728,13 @@ function place(tx,ty){ if(!inB(tx,ty))return; const c=grid[ty][tx]; gridVersion+
     else toast('🛡 Pillage repelled','the watch held the line');
     refreshHUD(); return; }
   const it=S.tool; if(!it)return;
-  if(it.road){ if(!isLand(tx,ty)||mountain(c)||c.civ||c.zone)return; if(c.road)return; if(!spend(it.cost))return; c.road=1; c.br=(c.ter===WATER)?1:0; if(c.ter<GRASS&&c.ter!==WATER)c.ter=BARE; syncTraffic(); refreshHUD(); playUISfx('build'); return; }
-  if(it.wire){ if(mountain(c)||c.civ||c.zone)return; if(!isLand(tx,ty)&&!c.road)return; if(c.wire)return; if(!spend(it.cost))return; c.wire=1; refreshHUD(); playUISfx('build'); return; }
+  if(it.road){ if(!isLand(tx,ty)||mountain(c)||c.civ||c.zone)return; if(c.road)return; if(!spend(it.cost))return; c.road=1; c.br=(c.ter===WATER)?1:0; if(c.ter<GRASS&&c.ter!==WATER)c.ter=BARE; syncTraffic(); refreshHUD(); playUISfx('build',0.5); return; }
+  if(it.wire){ if(mountain(c)||c.civ||c.zone)return; if(!isLand(tx,ty)&&!c.road)return; if(c.wire)return; if(!spend(it.cost))return; c.wire=1; refreshHUD(); playUISfx('build',0.5); return; }
   if(it.zone!=null){ if(!isLand(tx,ty)||mountain(c)||occupied(c)||c.civ||c.ruin)return; if(!spend(it.cost))return; c.zone=it.zone; if(c.ter<GRASS||c.ter===FOREST){c.ter=GRASS;}
-    c.dev= nearRoad(tx,ty,3)?1:0; if(c.dev>0)c.own=CLIENT; render(); refreshHUD(); playUISfx('build'); return; }
+    c.dev= nearRoad(tx,ty,3)?1:0; if(c.dev>0)c.own=CLIENT; render(); refreshHUD(); playUISfx('build',0.5); return; }
   if(it.civ!=null){ if(!isLand(tx,ty)||mountain(c)||occupied(c)||c.civ||c.ruin)return; if(it.civ===VALID&&S.era<8){advise('Validators need the Quantum Edo age.');return;}
     if(!spend(it.cost))return; c.civ=it.civ; c.zone=0;c.dev=0; if(it.civ===VALID)c.own=CLIENT; if(c.ter===FOREST||c.ter<GRASS)c.ter=BARE; if(it.civ===FARM)c.ter=BARE;
-    rebuildCoverage(); syncTraffic(); refreshHUD(); playUISfx('build'); return; }
+    rebuildCoverage(); syncTraffic(); refreshHUD(); playUISfx('build',0.5); return; }
 }
 let dragging=false,dragPan=false,last=null,downPt=null,moved=false,pinched=false; const ptrs=new Map(); let pinch=null;
 function evp(e){const r=cv.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top];}
@@ -4609,7 +4767,7 @@ document.getElementById('zout').onclick=()=>setZoom(cam.zoom*0.83,VW/2,VH/2);
 document.getElementById('zfit').onclick=fit;
 
 function toolBtn(id,prop){ const PROPS=['hand','douse','demo','pillage','arson','guard'], BTNS=['handBtn','douseBtn','demoBtn','pillageBtn','arsonBtn','guardBtn'];
-  document.getElementById(id).onclick=function(){ playUISfx('click'); S[prop]=!S[prop]; if(S[prop]){S.tool=null; PROPS.forEach(p=>{if(p!==prop)S[p]=false;});}
+  document.getElementById(id).onclick=function(){ playUISfx('click',0.5); S[prop]=!S[prop]; if(S[prop]){S.tool=null; PROPS.forEach(p=>{if(p!==prop)S[p]=false;});}
   BTNS.forEach(b=>document.getElementById(b).classList.toggle('on',document.getElementById(b)===this&&S[prop]));
   markSel(); cv.style.cursor=S.hand?'grab':'crosshair'; };}
 toolBtn('handBtn','hand'); toolBtn('douseBtn','douse'); toolBtn('demoBtn','demo'); toolBtn('pillageBtn','pillage'); toolBtn('arsonBtn','arson'); toolBtn('guardBtn','guard');
@@ -4654,7 +4812,7 @@ function loop(t){ const dt=lastT?Math.min(0.05,(t-lastT)/1000):0; lastT=t; fx=t;
   try{
     // During the first ~2s, re-fit whenever the viewport height changes (mobile URL-bar collapse, late layout)
     if(bootFitT<2.2){ bootFitT+=dt; const h=Math.round(cv.getBoundingClientRect().height)||0; if(h>0&&h!==lastVPH){ lastVPH=h; resize(); fit(); } }
-    updateEnv(dt); updateTraffic(dt); updateResidents(dt); updateApparitions(dt); updateEncounters(dt); updateCorpses(dt); updateGore(dt); updateDecay(dt);
+    updateEnv(dt); updateTraffic(dt); updateResidents(dt); updateFarms(dt); updateApparitions(dt); updateEncounters(dt); updateCorpses(dt); updateGore(dt); updateDecay(dt);
     if(window.SoruGibberish) window.SoruGibberish.update(dt);
     if(window.SoruAmbientZoom) window.SoruAmbientZoom.update(dt);
     tickAcc+=dt; if(tickAcc>=1.5){tickAcc=0;tick();}
@@ -5240,7 +5398,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
    vocal-texture clips from real .ogg files placed beside index.html.
    Zoom-gated (audible only when zoomed in, fades out by mid-zoom,
    silent when fully zoomed out). Reads cam.zoom / S.era / residents /
-   traffic / encounters. Writes nothing back to sim state — pure
+   encounters. Writes nothing back to sim state — pure
    presentation layer.
    ============================================================ */
 (function(){
@@ -5543,12 +5701,6 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
       for (var i=0;i<residents.length;i++){
         var r = residents[i]; if (r.claimed) continue;
         list.push({ ref:r, kind:'res', idx:i });
-      }
-    }
-    if (typeof traffic !== 'undefined') {
-      for (var j=0;j<traffic.length;j++){
-        var a = traffic[j]; if (a.kind!=='ped' || a.claimed) continue;
-        list.push({ ref:a, kind:'trf', idx:j });
       }
     }
     // include active raid defenders directly (combat barks)
