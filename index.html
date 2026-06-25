@@ -3934,6 +3934,40 @@ function fireTick(){ let any=false; for(let y=0;y<H;y++)for(let x=0;x<W;x++){con
   if(c.burn<=0){ if(c.civ&&c.civ!==TOWN){c.civ=0;} if(c.zone){if(c.own===CLIENT&&Math.random()<1){const pen=Math.min(S.wallet.sol,c.dev*0.12);S.wallet.sol-=pen;} c.zone=0;c.dev=0;c.own=0;} c.ruin=1;c.guard=0; } }
   if(any && typeof playFireBell==='function' && typeof performance!=='undefined' && performance.now()-_fireBellAt>3400) playFireBell(false); }
 
+/* ===== UI sound effects — click/build/raze/error/notification =====
+   Real .wav assets sitting alongside index.html (same folder). Loaded by
+   plain relative filename via fetch+decodeAudioData, same pattern as the
+   gibberish-voice sample loader: lazy, cached by name, fire-once, failures
+   remembered so a missing/renamed file doesn't retry every call. Routed
+   through sfxCtx()/sfxDest() so they share the SFX volume slider and
+   AudioContext with the rest of the game rather than spinning up their own. */
+const UI_SFX_FILES = { click:'click.wav', build:'build.wav', raze:'raze.wav', error:'error.wav', notification:'notification.wav' };
+const _uiSfxBuf={}, _uiSfxFailed={}, _uiSfxLoading={};
+function _uiSfxLoad(name){
+  const file = UI_SFX_FILES[name];
+  if(!file || _uiSfxBuf[name] || _uiSfxFailed[name] || _uiSfxLoading[name]) return;
+  const ctx = sfxCtx(); if(!ctx) return;
+  _uiSfxLoading[name]=true;
+  const resolvedURL = new URL(file, document.baseURI).href;
+  fetch(file).then(res=>{ if(!res.ok) throw new Error('HTTP '+res.status+' at '+resolvedURL); return res.arrayBuffer(); })
+    .then(ab=>ctx.decodeAudioData(ab))
+    .then(buf=>{ _uiSfxBuf[name]=buf; _uiSfxLoading[name]=false; })
+    .catch(e=>{ _uiSfxFailed[name]=true; _uiSfxLoading[name]=false;
+      const msg='UI sfx missing/unreadable: '+file+' — looked for it at '+resolvedURL+' ('+(e.message||e)+')';
+      if(window.__err) window.__err(msg); else console.warn(msg); });
+}
+function _uiSfxPreloadAll(){ for(const k in UI_SFX_FILES) _uiSfxLoad(k); }
+function playUISfx(name,gainScale){
+  _uiSfxLoad(name);                                            // ensure it's loading for next time even on a miss
+  const ctx = sfxCtx(); if(!ctx) return;
+  const buf = _uiSfxBuf[name]; if(!buf) return;                 // not decoded yet — silently skip this call, not an error
+  const src = ctx.createBufferSource(); src.buffer = buf;
+  const g = ctx.createGain(); g.gain.value = (gainScale!=null?gainScale:1);
+  src.connect(g); g.connect(sfxDest(ctx));
+  src.start(ctx.currentTime);
+}
+if(typeof window!=='undefined') window.addEventListener('pointerdown', _uiSfxPreloadAll, {once:true, passive:true});
+
 /* ============================ HUD ============================ */
 function fmt(n){n=Math.round(n);return Math.abs(n)>=1e6?(n/1e6).toFixed(2)+'M':Math.abs(n)>=1e4?(n/1e3).toFixed(1)+'k':n.toLocaleString();}
 /* ===== LUNAR CYCLE · CHINESE ZODIAC · TAROT ===== */
@@ -3966,7 +4000,8 @@ function refreshHUD(){
 }
 let advTimer=0;
 function advise(s){document.getElementById('advisor').innerHTML='<b>DR. SOL</b> — '+s;advTimer=9;}
-function toast(t,s){const d=document.createElement('div');d.className='tmsg';d.innerHTML='<b>'+t+'</b>'+(s?' · '+s:'');document.getElementById('toast').appendChild(d);setTimeout(()=>d.remove(),2200);}
+function toast(t,s,isError){const d=document.createElement('div');d.className='tmsg'+(isError?' err':'');d.innerHTML='<b>'+t+'</b>'+(s?' · '+s:'');document.getElementById('toast').appendChild(d);setTimeout(()=>d.remove(),2200);
+  playUISfx(isError?'error':'notification',0.7);}
 function worstDistrict(){ if(!healthGrid)return null; const GS=10,cols=Math.ceil(W/GS),bk={};
   for(let y=0;y<H;y++)for(let x=0;x<W;x++){const c=grid[y][x];if(!c.zone||c.dev<1)continue;const noH=!healthGrid[y][x],noE=!eduGrid[y][x];if(!noH&&!noE)continue;
     const k=((y/GS)|0)*cols+((x/GS)|0);const b=bk[k]||(bk[k]={n:0,nH:0,nE:0,sx:0,sy:0});b.n++;if(noH)b.nH++;if(noE)b.nE++;b.sx+=x;b.sy+=y;}
@@ -4000,6 +4035,7 @@ function buildPalette(){ const el=document.getElementById('builds'); el.innerHTM
     const co=document.createElement('div');co.className='cost';co.textContent='$'+it.cost;d.appendChild(co);
     if(locked){const lk=document.createElement('div');lk.className='lk';lk.textContent='🔒';d.appendChild(lk);}
     d.onclick=()=>{ if(locked){advise('That needs the '+ERAS[it.era].nm+' age.');return;}
+      playUISfx('click');
       S.tool=it;S.hand=false;S.douse=false;S.demo=false;S.pillage=false;S.arson=false; ['handBtn','douseBtn','demoBtn','pillageBtn','arsonBtn'].forEach(b=>document.getElementById(b).classList.remove('on'));
       markSel(); cv.style.cursor='crosshair'; };
     el.appendChild(d);} markSel(); }
@@ -4008,19 +4044,19 @@ function markSel(){ document.querySelectorAll('.bbtn').forEach(d=>d.classList.to
 /* ============================ INPUT / ACTIONS ============================ */
 let lastPoorMsg=0;
 function spend(g){ if(S.wallet.soru<g){ if(performance.now()-lastPoorMsg>1200){ lastPoorMsg=performance.now();
-    toast('Need $'+g+' SORU','have $'+fmt(Math.round(S.wallet.soru))); advise('Out of $SORU — it is burned on every act. Earn SOL from the buildings you keep standing, then swap SOL→$SORU at the DEX.'); } return false; }
+    toast('Need $'+g+' SORU','have $'+fmt(Math.round(S.wallet.soru)),true); advise('Out of $SORU — it is burned on every act. Earn SOL from the buildings you keep standing, then swap SOL→$SORU at the DEX.'); } return false; }
   S.wallet.soru-=g; S.burned+=g; S.recentBurn+=g; S.kami+=g; return true; }   // 100% burned → Kami (1:1, exactly $SORU spent)
 function place(tx,ty){ if(!inB(tx,ty))return; const c=grid[ty][tx]; gridVersion++;
   if(S.demo){ if(c.civ===TOWN)return;                          // RAZE: tear down your OWN works only — rivals must be PILLAGED
-    if(c.own&&c.own!==CLIENT){ toast('Not yours','use PILLAGE on rivals'); return; }
+    if(c.own&&c.own!==CLIENT){ toast('Not yours','use PILLAGE on rivals',true); return; }
     if(!(c.zone||c.civ||c.dev||c.road||c.wire||c.ruin)){ return; } // nothing to raze here
     if(!spend(500))return;                                       // 500 $SORU burned — cleanup tool
     c.zone=0;c.civ=0;c.dev=0;c.own=0;c.wire=0;c.blight=0;c.ruin=0;c.burn=0;c.guard=0; if(c.road)c.road=0;
-    syncTraffic(); rebuildCoverage(); refreshHUD(); return; }
+    syncTraffic(); rebuildCoverage(); refreshHUD(); playUISfx('raze'); return; }
   if(S.douse){ if(c.burn){c.burn=0; for(const[dx,dy]of NEIGH){const n=grid[ty+dy]&&grid[ty+dy][tx+dx];if(n&&n.burn)n.burn=Math.max(0,n.burn-2);} toast('💧 Doused');} return; }
   if(S.guard){ const mine=(c.dev>0&&c.own===CLIENT)||(c.civ&&c.civ!==TOWN);
-    if(!mine){ toast('Guard your own','shield a building you own'); return; }
-    if(c.guard){ toast('Already shielded','a retainer already stands watch'); return; }
+    if(!mine){ toast('Guard your own','shield a building you own',true); return; }
+    if(c.guard){ toast('Already shielded','a retainer already stands watch',true); return; }
     if(!spend(2000))return;                                       // 2,000 $SORU burned — ronin retainer's fee
     c.guard=1; toast('🛡 Ronin hired','this building shrugs off the next raid'); refreshHUD(); return; }
   if(S.arson){ if(!(c.dev>0||(c.civ&&c.civ!==TOWN)))return;     // TEST: self-target allowed
@@ -4038,13 +4074,13 @@ function place(tx,ty){ if(!inB(tx,ty))return; const c=grid[ty][tx]; gridVersion+
     else toast('🛡 Pillage repelled','the watch held the line');
     refreshHUD(); return; }
   const it=S.tool; if(!it)return;
-  if(it.road){ if(!isLand(tx,ty)||mountain(c)||c.civ||c.zone)return; if(c.road)return; if(!spend(it.cost))return; c.road=1; c.br=(c.ter===WATER)?1:0; if(c.ter<GRASS&&c.ter!==WATER)c.ter=BARE; syncTraffic(); refreshHUD(); return; }
-  if(it.wire){ if(mountain(c)||c.civ||c.zone)return; if(!isLand(tx,ty)&&!c.road)return; if(c.wire)return; if(!spend(it.cost))return; c.wire=1; refreshHUD(); return; }
+  if(it.road){ if(!isLand(tx,ty)||mountain(c)||c.civ||c.zone)return; if(c.road)return; if(!spend(it.cost))return; c.road=1; c.br=(c.ter===WATER)?1:0; if(c.ter<GRASS&&c.ter!==WATER)c.ter=BARE; syncTraffic(); refreshHUD(); playUISfx('build'); return; }
+  if(it.wire){ if(mountain(c)||c.civ||c.zone)return; if(!isLand(tx,ty)&&!c.road)return; if(c.wire)return; if(!spend(it.cost))return; c.wire=1; refreshHUD(); playUISfx('build'); return; }
   if(it.zone!=null){ if(!isLand(tx,ty)||mountain(c)||occupied(c)||c.civ||c.ruin)return; if(!spend(it.cost))return; c.zone=it.zone; if(c.ter<GRASS||c.ter===FOREST){c.ter=GRASS;}
-    c.dev= nearRoad(tx,ty,3)?1:0; if(c.dev>0)c.own=CLIENT; render(); refreshHUD(); return; }
+    c.dev= nearRoad(tx,ty,3)?1:0; if(c.dev>0)c.own=CLIENT; render(); refreshHUD(); playUISfx('build'); return; }
   if(it.civ!=null){ if(!isLand(tx,ty)||mountain(c)||occupied(c)||c.civ||c.ruin)return; if(it.civ===VALID&&S.era<8){advise('Validators need the Quantum Edo age.');return;}
     if(!spend(it.cost))return; c.civ=it.civ; c.zone=0;c.dev=0; if(it.civ===VALID)c.own=CLIENT; if(c.ter===FOREST||c.ter<GRASS)c.ter=BARE; if(it.civ===FARM)c.ter=BARE;
-    rebuildCoverage(); syncTraffic(); refreshHUD(); return; }
+    rebuildCoverage(); syncTraffic(); refreshHUD(); playUISfx('build'); return; }
 }
 let dragging=false,dragPan=false,last=null,downPt=null,moved=false,pinched=false; const ptrs=new Map(); let pinch=null;
 function evp(e){const r=cv.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top];}
@@ -4077,7 +4113,7 @@ document.getElementById('zout').onclick=()=>setZoom(cam.zoom*0.83,VW/2,VH/2);
 document.getElementById('zfit').onclick=fit;
 
 function toolBtn(id,prop){ const PROPS=['hand','douse','demo','pillage','arson','guard'], BTNS=['handBtn','douseBtn','demoBtn','pillageBtn','arsonBtn','guardBtn'];
-  document.getElementById(id).onclick=function(){ S[prop]=!S[prop]; if(S[prop]){S.tool=null; PROPS.forEach(p=>{if(p!==prop)S[p]=false;});}
+  document.getElementById(id).onclick=function(){ playUISfx('click'); S[prop]=!S[prop]; if(S[prop]){S.tool=null; PROPS.forEach(p=>{if(p!==prop)S[p]=false;});}
   BTNS.forEach(b=>document.getElementById(b).classList.toggle('on',document.getElementById(b)===this&&S[prop]));
   markSel(); cv.style.cursor=S.hand?'grab':'crosshair'; };}
 toolBtn('handBtn','hand'); toolBtn('douseBtn','douse'); toolBtn('demoBtn','demo'); toolBtn('pillageBtn','pillage'); toolBtn('arsonBtn','arson'); toolBtn('guardBtn','guard');
@@ -4648,27 +4684,38 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      calm/chatty default pool is the *-chatN / *-happy / *-sad files;
      raids pull from the more aggressive/scared-sounding set. */
   var FEMALE_BANK = {
-    idle:    ['f-chat1.ogg'],
-    social:  ['f-chat1.ogg','f-happy1.ogg'],
+    idle:    ['f-chat1.ogg','f-happy1.ogg','f-sad.ogg'],
+    social:  ['f-chat1.ogg','f-happy1.ogg','f-laugh1.ogg'],
     happy:   ['f-happy1.ogg','f-laugh1.ogg','f-laugh2.ogg'],
-    laugh:   ['f-laugh1.ogg','f-laugh2.ogg'],
-    worried: ['f-sad.ogg'],
+    laugh:   ['f-laugh1.ogg','f-laugh2.ogg','f-happy1.ogg'],
+    worried: ['f-sad.ogg','f-chat1.ogg'],
     sad:     ['f-sad.ogg'],
-    scared:  ['f-sad.ogg'],
-    curious: ['f-chat1.ogg']
+    scared:  ['f-sad.ogg','f-chat1.ogg'],
+    curious: ['f-chat1.ogg','f-happy1.ogg']
   };
   var MALE_BANK = {
-    idle:      ['m-chat1.ogg','m-chat2.ogg','m-chat3.ogg','m-chat4.ogg'],
+    idle:      ['m-chat1.ogg','m-chat2.ogg','m-chat3.ogg','m-chat4.ogg','m-weird1.ogg'],
     social:    ['m-chat1.ogg','m-chat2.ogg','m-chat3.ogg','m-chat4.ogg','m-happy.ogg'],
-    happy:     ['m-happy.ogg'],
-    laugh:     ['m-happy.ogg'],
-    worried:   ['m-weird1.ogg','m-weird2.ogg'],
-    aggressive:['m-angry.ogg'],
-    scared:    ['m-weird1.ogg','m-weird2.ogg'],
-    curious:   ['m-chat1.ogg','m-weird1.ogg']
+    happy:     ['m-happy.ogg','m-chat2.ogg'],
+    laugh:     ['m-happy.ogg','m-chat4.ogg'],
+    worried:   ['m-weird1.ogg','m-weird2.ogg','m-sad.ogg'],
+    aggressive:['m-angry.ogg','m-weird2.ogg'],
+    scared:    ['m-weird1.ogg','m-weird2.ogg','m-sad.ogg'],
+    curious:   ['m-chat1.ogg','m-weird1.ogg','m-chat3.ogg']
   };
 
-  function pick(arr){ return arr[(Math.random()*arr.length)|0]; }
+  // Picks from arr while avoiding `avoid` (the voice's last-played file) when
+  // the pool is large enough to do so — keeps a single voice from repeating
+  // the same clip twice in a row without forcing artificial pool shrinkage.
+  function pick(arr, avoid){
+    if (!avoid || arr.length<2) return arr[(Math.random()*arr.length)|0];
+    var f;
+    for (var tries=0; tries<4; tries++){
+      f = arr[(Math.random()*arr.length)|0];
+      if (f!==avoid) return f;
+    }
+    return f;
+  }
 
   /* ---------------- zoom gate ----------------
      Below GIB_Z_LOW: silent. Above GIB_Z_HIGH: full volume.
@@ -4774,11 +4821,16 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     if (!buf || !ctx) return 0;
     var src = ctx.createBufferSource();
     src.buffer = buf;
-    var rate = 0.78 + Math.random()*0.55;       // wider playback speed/pitch jitter (was 0.9-1.15)
+    // Two independent layers of pitch variance: coarse playbackRate jitter
+    // (covers both sped-up/chipmunk and slowed-down/deepened readings) plus
+    // a separate fine detune jitter, so two plays at a similar rate still
+    // land at audibly different pitches.
+    var rate = 0.7 + Math.random()*0.75;        // 0.70 - 1.45
     src.playbackRate.value = rate;
+    try { src.detune.value = (Math.random()*2-1) * 350; } catch(e){} // +/-350 cents fine pitch jitter
 
     var amp = ctx.createGain();
-    var peak = (0.4 + Math.random()*0.55) * gainScale; // wider volume variation
+    var peak = (0.32 + Math.random()*0.68) * gainScale; // wider volume variation
     var dur = buf.duration / rate;
     var attack = Math.min(0.04, dur*0.15), release = Math.min(0.25, dur*0.35);
     amp.gain.setValueAtTime(0.0001, t0);
@@ -4789,13 +4841,22 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     var node = src;
     try {
       var filt = ctx.createBiquadFilter();
-      filt.type = (Math.random()<0.5) ? 'lowpass' : 'allpass';
-      filt.frequency.value = 900 + Math.random()*2600; // 900-3500Hz — subtle muffling/brightness variance
-      filt.Q.value = 0.6 + Math.random()*0.8;
+      var ftypes = ['lowpass','allpass','highpass','peaking'];
+      filt.type = ftypes[(Math.random()*ftypes.length)|0];
+      filt.frequency.value = 700 + Math.random()*3200; // 700-3900Hz — broader muffling/brightness variance
+      filt.Q.value = 0.5 + Math.random()*1.4;
+      if (filt.type==='peaking') filt.gain.value = (Math.random()*2-1)*8;
       src.connect(filt); filt.connect(amp);
       node = filt;
     } catch(e){ src.connect(amp); }
-    amp.connect(voicesBus);
+
+    var outNode = amp;
+    try {
+      var pan = ctx.createStereoPanner();
+      pan.pan.value = (Math.random()*2-1) * 0.5; // subtle left/right drift per play
+      amp.connect(pan); outNode = pan;
+    } catch(e){}
+    outNode.connect(voicesBus);
     src.start(t0);
     src.stop(t0+dur+0.05);
     return dur;
@@ -4812,12 +4873,13 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
 
   function bankForVoice(voice){ return voice.gender==='f' ? FEMALE_BANK : MALE_BANK; }
 
-  var GLOBAL_MIN_GAP = 9.5; // seconds — absolute floor between any two phrases from the same voice, regardless of emotion rate
+  var GLOBAL_MIN_GAP = 13.0; // seconds — absolute floor between any two phrases from the same voice, regardless of emotion rate
 
   function schedulePhrase(voice, t0){
     var bank = bankForVoice(voice);
-    var pool = bank[voice.emotion] || bank.idle;
-    var filename = pick(pool);
+    var pool_ = bank[voice.emotion] || bank.idle;
+    var filename = pick(pool_, voice.lastFile);
+    voice.lastFile = filename;
     loadSample(filename); // ensure it's loading/loaded for next time even if this attempt misses
     var dur = 0;
     if (bufferCache[filename]) {
@@ -4825,8 +4887,8 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
       voiceActiveUntil = Math.max(voiceActiveUntil, t0 + dur);
     }
     var rate = EMO_RATE[voice.emotion] || EMO_RATE.idle;
-    var restMin = Math.max(GLOBAL_MIN_GAP, 2.2/rate);
-    var restMax = Math.max(restMin+2.0, 5.0/rate);
+    var restMin = Math.max(GLOBAL_MIN_GAP, 2.6/rate);
+    var restMax = Math.max(restMin+3.0, 6.2/rate);
     voice.nextAt = t0 + Math.max(dur,0.2) + restMin + Math.random()*(restMax-restMin);
     return dur;
   }
@@ -4847,7 +4909,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
   var GATHER_INTERVAL = 0.6;   // seconds between full re-gather passes
   var gatherT = 0;
   var voiceActiveUntil = 0;    // ctx.currentTime until which a sample is actually sounding — real concurrency gate
-  var GLOBAL_TRIGGER_CHANCE = 0.16; // even when a voice is "due", only fire this often — keeps it rare/atmospheric
+  var GLOBAL_TRIGGER_CHANCE = 0.10; // even when a voice is "due", only fire this often — keeps it rare/atmospheric
 
   function genderForAgent(a, seed){
     // stable per-agent gender so the same townsperson sounds consistent
@@ -5033,7 +5095,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
         v.emotion = (v.gender==='m' && Math.random()<0.5) ? 'aggressive' : 'scared';
         // stagger so the raid bark still passes through the single-voice gate naturally
         // instead of stacking everyone onto the same instant
-        v.nextAt = now + burst*GLOBAL_MIN_GAP*0.4 + Math.random()*0.4;
+        v.nextAt = now + burst*GLOBAL_MIN_GAP*0.7 + Math.random()*0.6;
         burst++;
       }
     }
@@ -5073,12 +5135,16 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
       ctx = (typeof sfxCtx === 'function') ? sfxCtx() : new (window.AudioContext||window.webkitAudioContext)();
     } catch(e){ ctx = null; }
     if (!ctx) return null;
-    bus = ctx.createGain(); bus.gain.value = 0.85;
+    // Bus gain lowered (was 0.85) — combat was overpowering ambient/UI audio.
+    // Compressor backed off (-22/3.2 -> -30/2.2, slower attack) so transients
+    // breathe instead of slamming into a hard ceiling, which read as "loud
+    // and synthetic" rather than weighty.
+    bus = ctx.createGain(); bus.gain.value = 0.46;
     var comp = null;
     try {
       comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -22; comp.knee.value = 12; comp.ratio.value = 3.2;
-      comp.attack.value = 0.002; comp.release.value = 0.12;
+      comp.threshold.value = -30; comp.knee.value = 18; comp.ratio.value = 2.2;
+      comp.attack.value = 0.008; comp.release.value = 0.22;
     } catch(e){}
     bus.connect(comp || master || ((typeof sfxDest==='function')?sfxDest(ctx):ctx.destination));
     if (comp) comp.connect((typeof sfxDest==='function')?sfxDest(ctx):ctx.destination);
@@ -5134,14 +5200,18 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      Metal-on-metal: bright noise burst shaped by a sharp bandpass,
      layered with 2-3 inharmonic ring partials for "shimmer". */
   var CLASH_VARIANTS = [
-    { freq: 2600, q: 7,  partials:[1, 2.41, 3.88], ringG: 0.46, noiseG: 0.78, dur: 0.16, tone:'sharp' },
-    { freq: 2100, q: 5,  partials:[1, 2.0, 3.2],   ringG: 0.50, noiseG: 0.72, dur: 0.20, tone:'resonant' },
-    { freq: 3100, q: 9,  partials:[1, 2.76],       ringG: 0.38, noiseG: 0.84, dur: 0.13, tone:'sharp' },
-    { freq: 1750, q: 4,  partials:[1, 1.78, 2.9],  ringG: 0.54, noiseG: 0.65, dur: 0.26, tone:'resonant' },
-    { freq: 2850, q: 8,  partials:[1, 2.55, 4.1],  ringG: 0.40, noiseG: 0.82, dur: 0.15, tone:'sharp' },
-    { freq: 2300, q: 6,  partials:[1, 2.2, 3.5],   ringG: 0.48, noiseG: 0.74, dur: 0.19, tone:'resonant' },
-    { freq: 1950, q: 3.5,partials:[1, 1.6, 2.6],   ringG: 0.52, noiseG: 0.68, dur: 0.23, tone:'low'    },
-    { freq: 3350, q: 11, partials:[1, 2.9, 4.6],   ringG: 0.34, noiseG: 0.88, dur: 0.11, tone:'bright' }
+    { freq: 2600, q: 7,  partials:[1, 2.41, 3.88], ringG: 0.30, noiseG: 0.50, dur: 0.16, tone:'sharp' },
+    { freq: 2100, q: 5,  partials:[1, 2.0, 3.2],   ringG: 0.33, noiseG: 0.46, dur: 0.20, tone:'resonant' },
+    { freq: 3100, q: 9,  partials:[1, 2.76],       ringG: 0.25, noiseG: 0.54, dur: 0.13, tone:'sharp' },
+    { freq: 1750, q: 4,  partials:[1, 1.78, 2.9],  ringG: 0.35, noiseG: 0.42, dur: 0.26, tone:'resonant' },
+    { freq: 2850, q: 8,  partials:[1, 2.55, 4.1],  ringG: 0.26, noiseG: 0.53, dur: 0.15, tone:'sharp' },
+    { freq: 2300, q: 6,  partials:[1, 2.2, 3.5],   ringG: 0.31, noiseG: 0.48, dur: 0.19, tone:'resonant' },
+    { freq: 1950, q: 3.5,partials:[1, 1.6, 2.6],   ringG: 0.34, noiseG: 0.44, dur: 0.23, tone:'low'    },
+    { freq: 3350, q: 11, partials:[1, 2.9, 4.6],   ringG: 0.22, noiseG: 0.57, dur: 0.11, tone:'bright' },
+    { freq: 2450, q: 6.5,partials:[1, 1.9, 3.05, 4.4], ringG: 0.28, noiseG: 0.47, dur: 0.18, tone:'complex' },
+    { freq: 2750, q: 7.5,partials:[1, 2.33],       ringG: 0.27, noiseG: 0.51, dur: 0.14, tone:'sharp' },
+    { freq: 1600, q: 3,  partials:[1, 1.7, 2.4, 3.3], ringG: 0.37, noiseG: 0.38, dur: 0.29, tone:'low'    },
+    { freq: 3600, q: 13, partials:[1, 2.95],       ringG: 0.19, noiseG: 0.58, dur: 0.10, tone:'bright' }
   ];
   function playClash(opts){
     var c = ensureCtx(); if (!c) return;
@@ -5149,7 +5219,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     var v = CLASH_VARIANTS[(Math.random()*CLASH_VARIANTS.length)|0];
     var t0 = c.currentTime + (opts.delay||0);
     var gainScale = (opts.gain!=null?opts.gain:1);
-    var jitter = rand(0.92,1.08);
+    var jitter = rand(0.90,1.10);
     var freq = v.freq*jitter;
 
     var ng = noiseSrc(c, bus, t0, v.dur, {type:'bandpass', freq:freq, q:v.q});
@@ -5162,17 +5232,20 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
            v.ringG*gainScale/(i*0.8+1), 1);
     }
     // tiny high-frequency "tick" transient for attack definition
-    ring(c, bus, t0, freq*1.6, 0.025, 0.18*gainScale, 1);
+    ring(c, bus, t0, freq*1.6, 0.025, 0.11*gainScale, 1);
   }
 
   /* ---------------- Katana Swing (3-4 variations) ----------------
      Whoosh: filtered noise with a fast frequency sweep (bandpass
      center moves), no metallic ring — just air being cut. */
   var SWING_VARIANTS = [
-    { startF: 1800, endF: 600,  dur: 0.16, q: 1.4, gain: 0.46, label:'fast-light'  },
-    { startF: 1200, endF: 350,  dur: 0.24, q: 1.1, gain: 0.50, label:'heavy'       },
-    { startF: 2200, endF: 800,  dur: 0.12, q: 1.6, gain: 0.42, label:'fast-light'  },
-    { startF: 1500, endF: 450,  dur: 0.20, q: 1.2, gain: 0.48, label:'medium'      }
+    { startF: 1800, endF: 600,  dur: 0.16, q: 1.4, gain: 0.30, label:'fast-light'  },
+    { startF: 1200, endF: 350,  dur: 0.24, q: 1.1, gain: 0.32, label:'heavy'       },
+    { startF: 2200, endF: 800,  dur: 0.12, q: 1.6, gain: 0.27, label:'fast-light'  },
+    { startF: 1500, endF: 450,  dur: 0.20, q: 1.2, gain: 0.31, label:'medium'      },
+    { startF: 1950, endF: 700,  dur: 0.14, q: 1.5, gain: 0.28, label:'fast-light'  },
+    { startF: 1350, endF: 300,  dur: 0.27, q: 1.0, gain: 0.33, label:'heavy'       },
+    { startF: 1650, endF: 500,  dur: 0.22, q: 1.3, gain: 0.29, label:'medium'      }
   ];
   function playSwing(opts){
     var c = ensureCtx(); if (!c) return;
@@ -5180,7 +5253,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     var v = SWING_VARIANTS[(Math.random()*SWING_VARIANTS.length)|0];
     var t0 = c.currentTime + (opts.delay||0);
     var gainScale = (opts.gain!=null?opts.gain:1);
-    var speedJ = rand(0.85,1.15);
+    var speedJ = rand(0.82,1.18);
     var dur = v.dur*speedJ;
 
     var src = c.createBufferSource();
@@ -5203,12 +5276,15 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      Blade hitting something solid (armor/body) — duller thud than
      a clash: low-passed noise thump + a short low ring partial. */
   var IMPACT_VARIANTS = [
-    { thumpF: 220, thumpQ: 1.2, ringF: 140, dur: 0.18, gain: 0.62, label:'soft'   },
-    { thumpF: 340, thumpQ: 1.6, ringF: 210, dur: 0.14, gain: 0.66, label:'sharp'  },
-    { thumpF: 180, thumpQ: 1.0, ringF: 110, dur: 0.22, gain: 0.58, label:'heavy'  },
-    { thumpF: 280, thumpQ: 1.4, ringF: 170, dur: 0.16, gain: 0.64, label:'medium' },
-    { thumpF: 250, thumpQ: 1.3, ringF: 155, dur: 0.20, gain: 0.60, label:'dull'   },
-    { thumpF: 310, thumpQ: 1.8, ringF: 195, dur: 0.12, gain: 0.68, label:'crisp'  }
+    { thumpF: 220, thumpQ: 1.2, ringF: 140, dur: 0.18, gain: 0.40, label:'soft'   },
+    { thumpF: 340, thumpQ: 1.6, ringF: 210, dur: 0.14, gain: 0.43, label:'sharp'  },
+    { thumpF: 180, thumpQ: 1.0, ringF: 110, dur: 0.22, gain: 0.37, label:'heavy'  },
+    { thumpF: 280, thumpQ: 1.4, ringF: 170, dur: 0.16, gain: 0.41, label:'medium' },
+    { thumpF: 250, thumpQ: 1.3, ringF: 155, dur: 0.20, gain: 0.39, label:'dull'   },
+    { thumpF: 310, thumpQ: 1.8, ringF: 195, dur: 0.12, gain: 0.44, label:'crisp'  },
+    { thumpF: 200, thumpQ: 1.1, ringF: 125, dur: 0.24, gain: 0.36, label:'thudding'},
+    { thumpF: 300, thumpQ: 1.5, ringF: 185, dur: 0.15, gain: 0.42, label:'snappy' },
+    { thumpF: 230, thumpQ: 1.25,ringF: 145, dur: 0.19, gain: 0.38, label:'soft'   }
   ];
   function playImpact(opts){
     var c = ensureCtx(); if (!c) return;
@@ -5227,7 +5303,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     var o = c.createOscillator(), og = c.createGain();
     o.type='sine'; o.frequency.value = v.ringF*jitter;
     og.gain.setValueAtTime(0.0001, t0);
-    og.gain.exponentialRampToValueAtTime(0.30*gainScale, t0+0.004);
+    og.gain.exponentialRampToValueAtTime(0.20*gainScale, t0+0.004);
     og.gain.exponentialRampToValueAtTime(0.0001, t0+v.dur*1.6);
     o.connect(og); og.connect(bus);
     o.start(t0); o.stop(t0+v.dur*1.6+0.05);
@@ -5235,7 +5311,7 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     // faint grit transient (cloth/leather/armor texture)
     var gg = noiseSrc(c, bus, t0, 0.03, {type:'highpass', freq:2400, q:0.7});
     gg.gain.setValueAtTime(0.0001,t0);
-    gg.gain.exponentialRampToValueAtTime(0.12*gainScale, t0+0.002);
+    gg.gain.exponentialRampToValueAtTime(0.07*gainScale, t0+0.002);
     gg.gain.exponentialRampToValueAtTime(0.0001, t0+0.03);
   }
 
@@ -5243,9 +5319,11 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
      Glancing metal contact — shorter, higher, thinner than a full
      clash; reads as a deflection rather than a clean strike. */
   var PARRY_VARIANTS = [
-    { freq: 3400, q: 10, dur: 0.10, ringG: 0.22, noiseG: 0.40 },
-    { freq: 2900, q: 8,  dur: 0.13, ringG: 0.26, noiseG: 0.36 },
-    { freq: 3800, q: 12, dur: 0.08, ringG: 0.18, noiseG: 0.44 }
+    { freq: 3400, q: 10, dur: 0.10, ringG: 0.15, noiseG: 0.26 },
+    { freq: 2900, q: 8,  dur: 0.13, ringG: 0.17, noiseG: 0.24 },
+    { freq: 3800, q: 12, dur: 0.08, ringG: 0.12, noiseG: 0.29 },
+    { freq: 3150, q: 9,  dur: 0.11, ringG: 0.16, noiseG: 0.25 },
+    { freq: 2650, q: 7,  dur: 0.14, ringG: 0.18, noiseG: 0.22 }
   ];
   function playParry(opts){
     var c = ensureCtx(); if (!c) return;
