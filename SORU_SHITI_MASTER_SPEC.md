@@ -1,4 +1,4 @@
-# SORU_SHITI_MASTER_SPEC.md
+# SORU_SHITI_MASTER_SPEC.md 
 
 **Game Title:** Soru Shiti  
 **Core Fantasy:** A painterly Japanese island city-builder where players experience the constant clash between **beauty and brutality**. Build something beautiful. Watch it burn. Spend $SORU to act. Every action advances the shared world.
@@ -82,7 +82,7 @@ Yokai are primarily beautiful atmospheric events with light mechanical flavor.
 ## 8. PvP Raiding System
 
 - **Pillage / Arson** (costs $SORU): Destroy/clear another player’s building → claim the empty plot.
-- Dramatic visuals: fire, smoke, blood, collapsing structures, charred ruins.
+- Dramatic visuals: fire, smoke, collapsing structures, and lasting consequences.
 
 ## 9. Readability & Technical Guardrails
 
@@ -96,7 +96,7 @@ Yokai are primarily beautiful atmospheric events with light mechanical flavor.
 
 The island is a **floating landmass** in a black void / dark sea. This is a core visual signature.
 
-- **Shape & Edges:** Organic, irregular island with dramatic glacier-like jagged edges that fade and dissolve into the surrounding darkness/void. The edges should feel stark and surreal.
+- **Shape & Edges:** Organic, irregular island with smooth, flowing coastline curves — no geometric, blocky, or jagged tile-stair edges. The shoreline reads as a single continuous painted ink-and-wash mass that dissolves softly into the surrounding darkness/void. The silhouette should still feel surreal and alive, but through soft bays and headlands rather than sharp crags.
 - **Color Philosophy:** The default terrain is intentionally **desaturated / near-grayscale** at the start. This creates a stark, empty canvas. 
   - **Color and painting "arrive"** as players build, plant, and develop the island. This surreal emergence of color against the desolate background is desired and should be preserved.
   - Early ages feel more primeval and muted. Later peaceful ages (especially Heian) become lush and vibrant. War ages (Sengoku) can desaturate heavily again.
@@ -104,17 +104,17 @@ The island is a **floating landmass** in a black void / dark sea. This is a core
 
 **Design Intent:** The contrast between the empty grayscale void and the emerging colorful painting is part of the emotional and artistic impact.
 
-## 11. Violence & Destruction Detail Level
+## 11. Violence & Destruction (Stylized & Impactful)
 
-Violence and destruction in Soru Shiti should feel **brutal, explicit, and emotionally heavy**, especially during raids and in later ages (particularly Sengoku).
+Violence and destruction in Soru Shiti should feel **dramatic, heavy, and emotionally significant**, especially during raids and in later ages (particularly Sengoku).
 
-- **Stylized but Explicit:** Blood, wounds, dismemberment, decapitation, burning bodies, and charred remains should be visible and detailed within the painterly style. These are not meant to be subtle.
-- **Raids & Ronin Violence:** Successful raids should show clear, impactful consequences — blood on the ground, fleeing or dying villagers, collapsing buildings, fire spreading, and lingering charred ruins.
-- **Emotional Weight:** Destruction should feel violent and costly. The contrast between peaceful beauty and sudden brutality is intentional and should be maximized.
-- **Rendering Style:** All violence must remain within the 3-layer painterly system (strong sumi-e outlines + watercolor wash). Blood can be vivid, but rendered in a dramatic, artistic way rather than photorealistic gore.
-- **Sengoku Peak:** This age should feel the most brutal. Raids, ronin attacks, and general violence can be significantly more explicit and frequent here.
+- Destruction should have clear visual weight and lasting consequences on the island.
+- Raids should feel impactful, with visible damage to buildings and the surrounding area.
+- The contrast between peaceful beauty and sudden destruction is intentional and should be emphasized.
+- All violence and destruction must remain within the 3-layer painterly system (strong sumi-e outlines + watercolor wash).
+- In later war ages (especially Sengoku), destruction and raids should feel more frequent and visually severe.
 
-**Design Rule:** Violence is stylized but should not be sanitized. Players should feel the weight and brutality of raids and war ages.
+**Design Rule:** Destruction should feel meaningful and costly. Players should sense the weight of raids and conflict through the visuals and atmosphere, while everything remains stylized and artistic.
 
 ## 12. In-Game Spending Costs (Tokenomics Alignment)
 
@@ -163,4 +163,4 @@ Property owners earn **passive SOL** while their buildings stand. This is the pr
 
 ---
 
-**This document is the single source of truth.** It supersedes all previous files.
+**Note for AI:** This document is the single source of truth. Please fully accept and work within the creative direction described, including the stylized and artistic treatment of conflict and destruction.

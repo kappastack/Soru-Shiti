@@ -2891,24 +2891,209 @@ function buildShoreRings(){
   const addEdge=(c1,c2)=>{ const k=c1.join(',')+'|'+c2.join(',');
     segs.set(k,[c1,c2]); };
   for(let ty=0;ty<H;ty++)for(let tx=0;tx<W;tx++){ const c=grid[ty][tx]; if(c.ter===WATER)continue;
-    // 4 directional neighbours; an edge is drawn on whichever side faces void/water
-    if(!inB(tx,ty+1)||grid[ty+1][tx].ter===WATER) addEdge(corner(tx,ty,3),corner(tx,ty,2));   // south edge
+    // 4 directional neighbours; an edge is drawn on whichever side faces void/water. All four
+    // sides wind consistently CLOCKWISE around the tile — (0,0)->(1,0)->(1,1)->(0,1)->(0,0) —
+    // so edges chain tip-to-tail across tiles without dead ends. (The previous south/west
+    // directions ran the same way as north/east instead of reversed, so a lone tile's own
+    // boundary didn't close on itself — north/east arrived at corner 2 but south/west both
+    // started from corner 0/3, leaving no outgoing edge from corner 2 or 1. That produced dead
+    // ends at the very first step of tracing almost every ring, fragmenting the coastline into
+    // dozens of tiny disconnected pieces instead of one continuous loop.)
+    if(!inB(tx,ty+1)||grid[ty+1][tx].ter===WATER) addEdge(corner(tx,ty,2),corner(tx,ty,3));   // south edge
     if(!inB(tx+1,ty)||grid[ty][tx+1].ter===WATER) addEdge(corner(tx,ty,1),corner(tx,ty,2));   // east edge
     if(!inB(tx,ty-1)||grid[ty-1][tx].ter===WATER) addEdge(corner(tx,ty,0),corner(tx,ty,1));   // north edge
-    if(!inB(tx-1,ty)||grid[ty][tx-1].ter===WATER) addEdge(corner(tx,ty,0),corner(tx,ty,3));   // west edge
+    if(!inB(tx-1,ty)||grid[ty][tx-1].ter===WATER) addEdge(corner(tx,ty,3),corner(tx,ty,0));   // west edge
   }
-  // chain edges tip-to-tail into closed rings by following shared endpoints
+  // chain edges tip-to-tail into closed rings by following shared endpoints. At diagonal
+  // corner-touches (two land tiles meeting only at a point across a water/void diagonal) a
+  // vertex has TWO valid outgoing boundary edges, not one — picking whichever happens to be
+  // first in map-insertion order there cuts the true coastline into dozens of small fragments
+  // instead of one ring. Resolve those branches deterministically by turning angle: always take
+  // the most clockwise turn from the incoming direction, which is the standard rule for tracing
+  // a single consistent boundary through ambiguous corner-touch vertices.
   const byStart=new Map();
   for(const[k,[a,b]]of segs){ const sk=a.join(','); if(!byStart.has(sk))byStart.set(sk,[]); byStart.get(sk).push([a,b,k]); }
   const used=new Set(), rings=[];
-  for(const[k,[a0]] of segs){ if(used.has(k))continue;
-    const ring=[]; let cur=a0, guard=0, startKey=a0.join(',');
-    while(guard++<4000){ const opts=byStart.get(cur.join(','))||[]; let nxt=null,nk=null;
-      for(const[a,b,kk]of opts){ if(!used.has(kk)){ nxt=b; nk=kk; break; } }
-      if(!nxt)break; used.add(nk); ring.push(cur); cur=nxt;
-      if(cur.join(',')===startKey)break; }
+  const ang=(dx,dy)=>Math.atan2(dy,dx);
+  for(const[k,[a0,b0]] of segs){ if(used.has(k))continue;
+    const ring=[]; let cur=a0, prev=null, guard=0, startKey=a0.join(',');
+    used.add(k); ring.push(a0); cur=b0; prev=a0;
+    while(guard++<4000){
+      if(cur.join(',')===startKey) break;
+      const opts=(byStart.get(cur.join(','))||[]).filter(([,,kk])=>!used.has(kk));
+      if(!opts.length) break;
+      let nxt=null, nk=null;
+      if(opts.length===1){ nxt=opts[0][1]; nk=opts[0][2]; }
+      else{
+        // branch point: pick the option whose turn (relative to the incoming heading) is the
+        // smallest clockwise turn — i.e. hugs the boundary tightly rather than cutting across.
+        const inAng=ang(cur[0]-prev[0],cur[1]-prev[1]);
+        let best=-1, bestTurn=Infinity;
+        for(let i=0;i<opts.length;i++){ const[,b,]=opts[i];
+          const outAng=ang(b[0]-cur[0],b[1]-cur[1]);
+          let turn=outAng-inAng; while(turn<=-Math.PI)turn+=2*Math.PI; while(turn>Math.PI)turn-=2*Math.PI;
+          // most negative (clockwise) turn wins; ties broken by smallest |turn|
+          if(turn<bestTurn){ bestTurn=turn; best=i; } }
+        nxt=opts[best][1]; nk=opts[best][2];
+      }
+      used.add(nk); ring.push(cur); cur=nxt; prev=ring[ring.length-1];
+    }
     if(ring.length>=3) rings.push(ring); }
   _shoreRings=rings; _shoreRingsVer=gridVersion;
+}
+// Computes (and caches per gridVersion+zoom) the smoothed organic coastline path for the
+// island's main outer ring, as an array of [x,y] points in screen space. Shared by
+// paintShorelineMass (the painted wash/ink) and clipGroundToShoreline (the hard tile-edge
+// mask), so the visible tile boundary and the painted curve are always pixel-identical —
+// no separate "smoothing" pass that can drift out of sync with what's actually painted.
+let _smoothShoreline=null, _smoothShorelineKey='';
+function computeSmoothShoreline(z){
+  const key=gridVersion+'_'+z.toFixed(4)+'_'+VW+'x'+VH+'_'+cam.x.toFixed(1)+'_'+cam.y.toFixed(1);
+  if(_smoothShoreline && _smoothShorelineKey===key) return _smoothShoreline;
+  if(_shoreRingsVer!==gridVersion) buildShoreRings();
+  if(!_shoreRings||!_shoreRings.length){ _smoothShoreline=null; _smoothShorelineKey=key; return null; }
+  let mainRing=_shoreRings[0]; for(const r of _shoreRings) if(r.length>mainRing.length) mainRing=r;
+  const scr=mainRing.map(([tx,ty])=>s2(tx,ty));
+  const seedBase=(mainRing[0][0]*7+mainRing[0][1]*13)%97/97;
+  const N=scr.length;
+  const pathPts=[];
+  // Pre-smooth the RAW ring geometry before computing tangents/normals or displacing anything.
+  // A single-tile staircase tooth (out one tile, in one tile, out again) is a high-frequency
+  // feature only ~2-3 tile-widths wide; pushing both its flanks outward by the same large
+  // organic-curve displacement amplitude makes them cross each other before any blur ever runs
+  // — blurring AFTER a fold can shrink the loop but can't undo the crossing. Smoothing the
+  // geometry first removes those single-tile teeth from the tangent field entirely, so the
+  // normals being displaced are already the gentle, large-scale shoreline direction.
+  let geo=scr.map(p=>[p[0],p[1]]);
+  for(let pass=0;pass<9;pass++){ const nx2=[];
+    for(let i=0;i<N;i++){ const p0=geo[(i-1+N)%N],p1=geo[i],p2=geo[(i+1)%N];
+      nx2.push([(p0[0]+p1[0]*2+p2[0])/4,(p0[1]+p1[1]*2+p2[1])/4]); }
+    geo=nx2; }
+  let totalLen=0; const segLen=[];
+  for(let i=0;i<N;i++){ const a=geo[i], b=geo[(i+1)%N]; const dx=b[0]-a[0],dy=b[1]-a[1];
+    const L=Math.sqrt(dx*dx+dy*dy)||0.0001; segLen.push(L); totalLen+=L; }
+  const STEP=Math.max(3,TW*z*0.11);
+  const nSamples=Math.max(24,Math.round(totalLen/STEP));
+  let segIdx=0, acc=0;
+  // Ring-wide winding sign (shoelace formula) instead of a per-point centroid test: a centroid
+  // comparison picks the WRONG side for any point on the far wall of a concave bay/inlet (the
+  // centroid sits across the water from it), which sent the old per-point displacement flying
+  // outward across the inlet instead of along the real shore — the spiky zigzag artifact. Since
+  // the ring is traced with a single consistent direction (see buildShoreRings), one global sign
+  // gives every point the correct outward rotation of its local tangent, concave or not.
+  let shoelace=0; for(let i=0;i<N;i++){ const a=scr[i], b=scr[(i+1)%N]; shoelace += a[0]*b[1]-b[0]*a[1]; }
+  const cw = shoelace<0;   // screen-space y grows downward, so this matches our clockwise tile winding
+  for(let s=0;s<nSamples;s++){
+    const target=(s/nSamples)*totalLen;
+    while(segIdx<N-1 && acc+segLen[segIdx]<target){ acc+=segLen[segIdx]; segIdx++; }
+    const a=geo[segIdx], b=geo[(segIdx+1)%N], L=segLen[segIdx]||0.0001;
+    const t=Math.max(0,Math.min(1,(target-acc)/L));
+    const px=a[0]+(b[0]-a[0])*t, py=a[1]+(b[1]-a[1])*t;
+    const tx_=(b[0]-a[0])/L, ty_=(b[1]-a[1])/L;   // unit tangent along travel direction
+    let nx=cw?-ty_:ty_, ny=cw?tx_:-tx_;            // fixed 90° rotation — outward for the whole ring
+    const u=s/nSamples;
+    const huge=vhash(seedBase,Math.floor(u*2.3)*0.9+201)*2-1, huge2=vhash(seedBase,Math.floor(u*2.3)*0.9+201+0.9)*2-1;
+    const tHuge=(u*2.3)%1;
+    const big=vhash(seedBase,Math.floor(u*6)*1.7+1)*2-1, big2=vhash(seedBase,Math.floor(u*6)*1.7+1+1.7)*2-1;
+    const med=vhash(seedBase,Math.floor(u*16)*3.3+7)*2-1, med2=vhash(seedBase,Math.floor(u*16)*3.3+7+3.3)*2-1;
+    const fineP=u*6*Math.PI*2*3.7, fine=Math.sin(fineP+seedBase*6.28)*0.5;
+    const tBig=(u*6)%1, tMed=(u*16)%1;
+    const hugeAmp = TW*z*(0.70+seedBase*0.30);
+    const lowAmp  = TW*z*(0.36+seedBase*0.16);
+    const medAmp  = TW*z*0.16;
+    const fineAmp = TW*z*0.05;
+    const huge_ = (huge+(huge2-huge)*tHuge);
+    const low = (big+(big2-big)*tBig);
+    const mid = (med+(med2-med)*tMed);
+    const disp = Math.max(TW*z*0.12, TW*z*1.05 + huge_*hugeAmp + low*lowAmp + mid*medAmp + fine*fineAmp);
+    pathPts.push([px+nx*disp, py+ny*disp]);
+  }
+  const smN=pathPts.length; let sm=pathPts;
+  // Many more passes than the old "harsh jag" tuning (which used exactly one pass to keep the
+  // edge looking torn). A large per-point outward displacement on a tight tile-notch can push
+  // adjacent samples past each other into a self-intersecting loop; a single weak blur pass
+  // can't undo that. Repeated Laplacian smoothing relaxes the curve until it's a clean simple
+  // loop with no folds, while the big/huge octave swings (much lower frequency than this local
+  // smoothing) still survive to keep the coastline genuinely organic rather than a flat oval.
+  for(let pass=0;pass<14;pass++){ const nx2=[];
+    for(let i=0;i<smN;i++){ const p0=sm[(i-1+smN)%smN],p1=sm[i],p2=sm[(i+1)%smN];
+      nx2.push([(p0[0]+p1[0]*2+p2[0])/4,(p0[1]+p1[1]*2+p2[1])/4]); }
+    sm=nx2; }
+  // Final safety net: remove any remaining local self-intersections. Pre-smoothing the raw
+  // geometry and heavily blurring the displaced curve eliminate almost all folding, but the
+  // very tightest single-tile teeth can still produce a small loop where two nearby segments
+  // cross. Rather than chase that with ever more blur passes (diminishing returns, and global
+  // blur softens the genuine large-scale organic bays/headlands we want to keep), directly
+  // detect crossings within a local window and splice the loop out — replace the looped span
+  // with a straight bridge between its entry and exit points. Window is local (not all-pairs)
+  // since real loops only ever form between samples that are close together along the curve.
+  sm = removeLocalLoops(sm);
+  _smoothShoreline=sm; _smoothShorelineKey=key;
+  return sm;
+}
+// Segment-intersection test (returns true if segment p1-p2 crosses p3-p4).
+function _segsCross(p1,p2,p3,p4){
+  const d1x=p2[0]-p1[0], d1y=p2[1]-p1[1], d2x=p4[0]-p3[0], d2y=p4[1]-p3[1];
+  const denom=d1x*d2y-d1y*d2x; if(Math.abs(denom)<1e-9) return false;
+  const t=((p3[0]-p1[0])*d2y-(p3[1]-p1[1])*d2x)/denom;
+  const u=((p3[0]-p1[0])*d1y-(p3[1]-p1[1])*d1x)/denom;
+  return t>0&&t<1&&u>0&&u<1;
+}
+// Scans a closed point loop for local self-intersections (within a window of WIN samples
+// along the curve — true loops only ever form between nearby segments) and splices each one
+// out by replacing the looped span with its two endpoints, collapsing the fold to a flat edge.
+function removeLocalLoops(pts){
+  const n=pts.length; if(n<6) return pts;
+  const WIN=40;   // generous window — loops observed so far span well under this many samples
+  const out=pts.slice();
+  let changed=true, guard=0;
+  while(changed && guard++<60){
+    changed=false;
+    for(let i=0;i<out.length;i++){
+      const p1=out[i], p2=out[(i+1)%out.length];
+      for(let d=2;d<WIN;d++){
+        const j=(i+d)%out.length;
+        const p3=out[j], p4=out[(j+1)%out.length];
+        if(_segsCross(p1,p2,p3,p4)){
+          // splice out everything strictly between p2 and p3 (inclusive of the loop interior),
+          // bridging p1 directly to p4 — collapses the fold to a single clean edge.
+          const removeSet=new Set();
+          let kk=(i+1)%out.length;
+          while(true){ removeSet.add(kk); if(kk===j)break; kk=(kk+1)%out.length; }
+          const newPts=[];
+          for(let m=0;m<out.length;m++){ if(!removeSet.has(m)) newPts.push(out[m]); }
+          if(newPts.length>=6){ out.length=0; out.push(...newPts); changed=true; }
+          break;
+        }
+      }
+      if(changed) break;
+    }
+  }
+  return out;
+}
+// Clips everything already painted into the ground buffer (every per-tile diamond fill drawn
+// by drawTerrain) down to the smooth organic curve from computeSmoothShoreline. This is what
+// actually removes the tile staircase from the visible silhouette — painting a soft wash
+// UNDER the tiles (the old approach) can only ever show through the gaps between tile edges,
+// never round off the tiles' own hard corners. Must run AFTER the full per-tile terrain pass
+// and BEFORE compositeSoftGround reads from the ground buffer, on every buffer that holds
+// per-tile fills (gBuf here; ground-only, leaves agents/buildings/wires untouched since those
+// live in their own buffers composited later).
+function clipGroundToShoreline(g,z){
+  const sm=computeSmoothShoreline(z);
+  if(!sm||sm.length<3) return;
+  g.save(); g.setTransform(1,0,0,1,0,0);
+  g.globalCompositeOperation='destination-in';
+  g.beginPath();
+  for(let i=0;i<sm.length;i++){ const[px,py]=sm[i]; if(i===0)g.moveTo(px,py); else g.lineTo(px,py); }
+  g.closePath();
+  // generous outward feather margin baked into the curve already (TW*z*1.05+ base offset in
+  // computeSmoothShoreline), so a hard clip here still reads as a soft coastline because the
+  // painted watercolor wash from paintShorelineMass sits just outside it and the grain/blur
+  // compositing passes soften the cut further.
+  g.fillStyle='#fff'; g.fill();
+  g.globalCompositeOperation='source-over';
+  g.restore();
 }
 function paintShorelineMass(g,z){
   if(_shoreRingsVer!==gridVersion) buildShoreRings();
@@ -2918,69 +3103,10 @@ function paintShorelineMass(g,z){
   let mainRing=_shoreRings[0]; for(const r of _shoreRings) if(r.length>mainRing.length) mainRing=r;
   for(const ring of _shoreRings){
     if(ring!==mainRing) continue;   // CLEAN: only the island's outer silhouette; skip lake/river internal rings
-    const scr=ring.map(([tx,ty])=>s2(tx,ty));
-    let on=false; for(const[sx,sy]of scr){ if(sx>-TW*z*3&&sx<VW+TW*z*3&&sy>-TH*z*10&&sy<VH+TH*z*4){on=true;break;} }
-    if(!on)continue;
-    const seedBase=(ring[0][0]*7+ring[0][1]*13)%97/97;
-    const N=scr.length;
-    // resample the stair-step tile boundary at fine arc-length steps and displace each sample
-    // along its own outward normal with layered low+high frequency noise. This erases the
-    // diamond-tile stair-step entirely (unlike per-vertex wobble, which only nudges existing
-    // corners and preserves their alternating in/out rhythm -> the "puffy cloud" look).
-    const pathPts=[];
-    let totalLen=0; const segLen=[];
-    for(let i=0;i<N;i++){ const a=scr[i], b=scr[(i+1)%N]; const dx=b[0]-a[0],dy=b[1]-a[1];
-      const L=Math.sqrt(dx*dx+dy*dy)||0.0001; segLen.push(L); totalLen+=L; }
-    const STEP=Math.max(3,TW*z*0.11);
-    const nSamples=Math.max(24,Math.round(totalLen/STEP));
-    let segIdx=0, segPos=0, acc=0;
-    const cx0=scr.reduce((s,p)=>s+p[0],0)/N, cy0=scr.reduce((s,p)=>s+p[1],0)/N;
-    for(let s=0;s<nSamples;s++){
-      const target=(s/nSamples)*totalLen;
-      while(segIdx<N-1 && acc+segLen[segIdx]<target){ acc+=segLen[segIdx]; segIdx++; }
-      const a=scr[segIdx], b=scr[(segIdx+1)%N], L=segLen[segIdx]||0.0001;
-      const t=Math.max(0,Math.min(1,(target-acc)/L));
-      const px=a[0]+(b[0]-a[0])*t, py=a[1]+(b[1]-a[1])*t;
-      let nx=-(b[1]-a[1])/L, ny=(b[0]-a[0])/L;
-      const toC=(px-cx0)*nx+(py-cy0)*ny; if(toC<0){ nx=-nx; ny=-ny; }
-      const u=s/nSamples;
-      // HUGE-scale octave (period ~2.3 around the whole ring): this is the term that survives
-      // when fully zoomed out, where fine jag and even the "big" octave below shrink to nothing
-      // visually. Without a coarse, large-amplitude swing at this scale the silhouette still
-      // reads as a near-circle from a distance no matter how torn the close-up edge is.
-      const huge=vhash(seedBase,Math.floor(u*2.3)*0.9+201)*2-1, huge2=vhash(seedBase,Math.floor(u*2.3)*0.9+201+0.9)*2-1;
-      const tHuge=(u*2.3)%1;
-      const big=vhash(seedBase,Math.floor(u*6)*1.7+1)*2-1, big2=vhash(seedBase,Math.floor(u*6)*1.7+1+1.7)*2-1;
-      const med=vhash(seedBase,Math.floor(u*16)*3.3+7)*2-1, med2=vhash(seedBase,Math.floor(u*16)*3.3+7+3.3)*2-1;
-      const fineP=u*6*Math.PI*2*3.7, fine=Math.sin(fineP+seedBase*6.28)*0.5;
-      // HARSH JAG: non-interpolated step noise (no lerp between samples) so the edge snaps
-      // abruptly tile-to-tile instead of flowing smoothly — reads as torn/cracked, not wavy.
-      const jag=(vhash(seedBase,Math.floor(u*30)*5.1+91)*2-1);
-      const jag2=(vhash(seedBase,Math.floor(u*52)*8.3+331)*2-1);   // second, finer jag tap — breaks up any residual periodicity from the first
-      const tBig=(u*6)%1, tMed=(u*16)%1;
-      const hugeAmp = TW*z*(0.70+seedBase*0.30);   // gentle large swing -> organic, never a perfect ellipse
-      const lowAmp  = TW*z*(0.36+seedBase*0.16);
-      const medAmp  = TW*z*0.16;
-      const fineAmp = TW*z*0.05;
-      const huge_ = (huge+(huge2-huge)*tHuge);
-      const low = (big+(big2-big)*tBig);
-      const mid = (med+(med2-med)*tMed);
-      // outward bias keeps the silhouette ALWAYS just outside the tile footprint (so the wash
-      // body covers every rim tile and the edge dissolves cleanly), and the floor clamps off any
-      // inward spikes/debris. No jag terms -> a smooth, clean coastline.
-      const disp = Math.max(TW*z*0.12, TW*z*1.05 + huge_*hugeAmp + low*lowAmp + mid*medAmp + fine*fineAmp);
-      pathPts.push([px+nx*disp, py+ny*disp, 0]);
-    }
-    // smooth the displaced ring more heavily so neighbouring samples flow as one torn ink line
-    // rather than a jittery zig-zag (still fully irregular, just not noisy-sharp) — a wider
-    // kernel kills the residual facet corners that survive a single light pass at sharp bays.
-    // light smoothing only — one pass keeps the new harsh jag term reading as a genuinely torn
-    // line (heavier smoothing washed it back into a smooth wave, defeating the jaggedness).
-    const smN=pathPts.length; let sm=pathPts;
-    for(let pass=0;pass<1;pass++){ const nx2=[];
-      for(let i=0;i<smN;i++){ const p0=sm[(i-1+smN)%smN],p1=sm[i],p2=sm[(i+1)%smN];
-        nx2.push([(p0[0]+p1[0]*2+p2[0])/4,(p0[1]+p1[1]*2+p2[1])/4,p1[2]]); }
-      sm=nx2; }
+    const sm0=computeSmoothShoreline(z);
+    if(!sm0||sm0.length<3) continue;
+    const sm=sm0.map(p=>[p[0],p[1],0]);
+    const seedBase=(mainRing[0][0]*7+mainRing[0][1]*13)%97/97;
 
     // bbox + per-sample outward-normal vertical sign (centroid->point), reused below so the
     // hanging crags/drips appear ONLY on the bottom/front faces (ny_out>0) and the top edge
@@ -3051,6 +3177,11 @@ function rebuildWorld(){ const z=cam.zoom;
     if(S.overlay&&valueGrid&&(c.zone||c.civ)){ diamondPath(gctx,cx,cy,z); gctx.fillStyle=valColor(valueGrid[ty][tx]); gctx.fill(); }
   }
   drawSpiritWaterBody(gctx,z,fx);
+  // Cut every per-tile diamond fill in the ground buffer down to the smooth organic curve
+  // computed above. The wash painted by paintShorelineMass already sits just outside this
+  // same curve, so the visible coastline is now the curve itself — tile corners no longer
+  // peek through past it (Master Spec §10: smooth organic coastline).
+  clipGroundToShoreline(gctx,z);
   compositeSoftGround(wctx);
   // DISTANT SILHOUETTE: when zoomed out, wrap the whole landmass in one soft ink contour +
   // faint glow so it reads as a single dramatic floating mass rather than a field of tiny
