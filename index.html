@@ -129,25 +129,37 @@
     #panel{max-height:54vh} #builds{height:54px;max-height:54px} #sidebar{width:120px}
   }
   /* ---- auto-landscape on portrait phones ----
-     #gameRoot wraps all gameplay UI (canvas, hud, panel, modals). On a small portrait
-     screen we don't ask the player to physically rotate their phone — we rotate the
-     content itself with a CSS transform so it's immediately playable. The unrotated
-     box is pre-sized to swapped dimensions (100vh x 100vw); rotating it 90° makes its
-     on-screen bounding box exactly fill the portrait viewport (w=100vw,h=100vh), so
-     every downstream getBoundingClientRect()-based layout call (resize(), fit()) just
-     works without any coordinate-remapping changes. */
+     #gameRoot wraps all gameplay UI (canvas, hud, panel, modals); #boot is the
+     pre-game splash. On a small portrait screen we don't ask the player to
+     physically rotate their phone — we rotate both elements together with a CSS
+     transform so the whole experience, splash included, is immediately playable
+     in landscape. The unrotated box is pre-sized to swapped *dynamic* viewport
+     dimensions (100dvh x 100dvw, not 100vh x 100vw — static vh/vw overshoot on
+     mobile browsers whenever the address bar is showing, which is what produced
+     the squished/clipped layout); rotating it 90° makes its on-screen bounding box
+     exactly fill the real visible portrait viewport, so every downstream
+     getBoundingClientRect()-based layout call (resize(), fit()) just works without
+     any coordinate-remapping changes. */
   #gameRoot{position:relative}
   #gameRoot.forceLandscape{
     position:fixed; top:50%; left:50%;
-    width:100vh; height:100vw;
+    width:100dvh; height:100dvw;
     transform:translate(-50%,-50%) rotate(90deg);
     transform-origin:center center;
   }
   /* ---- boot splash ---- */
-  /* z-index 100. #boot sits above #gameRoot so the splash still reads right-side-up
-     even while #gameRoot is being rotated underneath it. */
+  /* z-index 100. #boot sits above #gameRoot. On small portrait screens it rotates
+     in lockstep with #gameRoot (via the shared .forceLandscape toggle) so the splash
+     reads correctly in the same landscape orientation as the rest of the game,
+     instead of staying upright while everything underneath is sideways. */
   #boot{position:fixed;inset:0;z-index:100;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;cursor:pointer;
     transition:opacity .6s ease; -webkit-tap-highlight-color:transparent}
+  #boot.forceLandscape{
+    position:fixed; top:50%; left:50%;
+    width:100dvh; height:100dvw;
+    transform:translate(-50%,-50%) rotate(90deg);
+    transform-origin:center center;
+  }
   #boot.hide{opacity:0;pointer-events:none}
   #bootLogo{width:148px;height:auto;display:block;filter:drop-shadow(0 4px 18px rgba(20,241,149,.18))}
   #bootTitle{font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;font-weight:700;letter-spacing:3px;font-size:34px;color:var(--bright);
@@ -161,17 +173,27 @@
   }
 </style>
 <script>
-  /* Auto-landscape gate: on a small portrait screen, rotate #gameRoot via CSS instead
-     of showing a "please rotate" prompt. Runs as early as possible (before
-     DOMContentLoaded) so layout is correct on first paint, and on every
-     resize/orientationchange thereafter, since some mobile browsers fire resize
-     before innerWidth/innerHeight settle to their final post-rotation values. */
+  /* Auto-landscape gate: on a small portrait screen, rotate #gameRoot (and the
+     #boot splash, in lockstep) via CSS instead of showing a "please rotate"
+     prompt. Runs as early as possible (before DOMContentLoaded) so layout is
+     correct on first paint, and on every resize/orientationchange thereafter,
+     since some mobile browsers fire resize before innerWidth/innerHeight settle
+     to their final post-rotation values. */
   function __updateRotateLock(){
     var el = document.getElementById('gameRoot'); if(!el) return;
+    var boot = document.getElementById('boot'); // may be null pre-DOMContentLoaded
     var w = window.innerWidth, h = window.innerHeight;
     var isPortrait = h > w;
     var shouldRotate = isPortrait && Math.min(w,h) <= 900;
+    var changed = el.classList.contains('forceLandscape') !== shouldRotate;
     el.classList.toggle('forceLandscape', shouldRotate);
+    if(boot) boot.classList.toggle('forceLandscape', shouldRotate);
+    /* The canvas resize()/fit() listener is registered later in the page and
+       can't be called directly from here; nudge it via a follow-up resize
+       event once the rotated box's dimensions have actually changed, so the
+       canvas re-measures against the post-rotation layout rather than a
+       stale pre-rotation box. */
+    if(changed) requestAnimationFrame(function(){ dispatchEvent(new Event('resize')); });
   }
   addEventListener('resize', __updateRotateLock);
   addEventListener('orientationchange', function(){ setTimeout(__updateRotateLock, 300); });
