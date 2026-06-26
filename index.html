@@ -129,6 +129,8 @@
     #panel{max-height:54vh} #builds{height:54px;max-height:54px} #sidebar{width:120px}
   }
   /* ---- boot splash ---- */
+  /* z-index 100, BELOW #rotateLock's 110 — a portrait device should see "rotate your device"
+     immediately, not have to tap through the boot splash first to discover it underneath. */
   #boot{position:fixed;inset:0;z-index:100;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;cursor:pointer;
     transition:opacity .6s ease; -webkit-tap-highlight-color:transparent}
   #boot.hide{opacity:0;pointer-events:none}
@@ -140,16 +142,40 @@
   @media(max-width:760px){
     #bootTitle{font-size:24px;letter-spacing:2px} #bootKanji{font-size:16px;letter-spacing:4px}
   }
-  /* ---- mobile orientation lock (landscape-only play, like a typical mobile game) ---- */
-  #rotateLock{position:fixed;inset:0;z-index:90;background:#000;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+  /* ---- mobile orientation lock (landscape-only play, like a typical mobile game) ----
+     #rotateLock's visibility is decided in JS (see updateRotateLock below) using
+     innerWidth/innerHeight, which is reliable everywhere. The CSS media query below is kept
+     ONLY as a no-JS fallback (display:none if JS never runs) — it must never be the sole gate,
+     since some mobile webviews/emulators don't update the `orientation` media feature reliably
+     on rotation, which left this screen stuck with no way out regardless of device rotation. */
+  #rotateLock{position:fixed;inset:0;z-index:110;background:#000;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;
     color:var(--bright);text-align:center;padding:0 24px}
+  #rotateLock.show{display:flex}
   #rotateLock svg{width:64px;height:64px;animation:rotHint 1.6s infinite}
   @keyframes rotHint{0%,100%{transform:rotate(0deg)}50%{transform:rotate(90deg)}}
   #rotateLock p{font-size:13px;color:var(--ink);max-width:280px;line-height:1.4;margin:0}
-  @media(max-width:900px) and (orientation:portrait){
-    #rotateLock{display:flex}
-  }
+  #rotateLock button{margin-top:4px;font:inherit;font-size:12px;padding:8px 16px;border-radius:6px;color:var(--bright);
+    background:linear-gradient(#262b31,#161a1f);border:1px solid var(--edge);cursor:pointer}
 </style>
+<script>
+  /* JS-driven rotate-lock: the single source of truth for #rotateLock visibility, independent
+     of the CSS `orientation` media feature (see comment above the #rotateLock rule). Runs as
+     early as possible (before DOMContentLoaded) so the gate is correct on first paint, and on
+     every resize/orientationchange thereafter. A manual "Continue anyway" escape is included so
+     a stuck device (lock fires but the browser truly cannot detect the rotation) is never a dead end. */
+  window.__rotateLockDismissed = false;
+  function __updateRotateLock(){
+    var el = document.getElementById('rotateLock'); if(!el) return;
+    var w = window.innerWidth, h = window.innerHeight;
+    var isPortrait = h > w;
+    var shouldShow = isPortrait && Math.min(w,h) <= 900 && !window.__rotateLockDismissed;
+    el.classList.toggle('show', shouldShow);
+  }
+  addEventListener('resize', __updateRotateLock);
+  addEventListener('orientationchange', function(){ setTimeout(__updateRotateLock, 300); });
+  document.addEventListener('DOMContentLoaded', __updateRotateLock);
+  __updateRotateLock();
+</script>
 </head>
 <body>
 <div id="boot">
@@ -163,6 +189,7 @@
     <line x1="11" y1="18" x2="13" y2="18" stroke-linecap="round"/>
   </svg>
   <p>Rotate your device — Soru Shiti plays in landscape.</p>
+  <button id="rotateLockSkip" type="button">Continue anyway</button>
 </div>
 <canvas id="cv"></canvas>
 <div id="top">
@@ -241,6 +268,10 @@
     <input id="optSfxVol" type="range" min="0" max="100" step="1" value="90">
   </div>
   <label class="optChk"><span>Disable Weather Graphics</span><input id="optNoWeather" type="checkbox"></label>
+  <div class="optRow" id="optDevEraRow" style="display:none">
+    <div class="optLbl"><b>DEV · Era Jump</b><span class="optVal" id="optDevEraVal"></span></div>
+    <div id="optDevEraBtns" style="display:flex;flex-wrap:wrap;gap:4px"></div>
+  </div>
   <button id="optClose">CLOSE</button>
 </div></div>
 
@@ -310,6 +341,14 @@ addEventListener('load',()=>{resize();fit();});
   bootEl.addEventListener('click',dismissBoot,{once:true});
 })();
 addEventListener('orientationchange',()=>{ setTimeout(()=>{resize();fit();},300); });
+(function(){
+  var skipBtn=document.getElementById('rotateLockSkip'); if(!skipBtn) return;
+  skipBtn.addEventListener('click', function(){
+    window.__rotateLockDismissed=true;
+    if(typeof __updateRotateLock==='function') __updateRotateLock();
+    resize(); fit();
+  });
+})();
 function s2(tx,ty){ return [cam.x+(tx-ty)*(TW/2)*cam.zoom, cam.y+(tx+ty)*(TH/2)*cam.zoom]; }
 function pick(mx,my){ const a=(mx-cam.x)/cam.zoom,b=(my-cam.y)/cam.zoom; return [Math.floor(a/TW+b/TH), Math.floor(b/TH-a/TW)]; }
 function shade(hex,d){ if(!isFinite(d))d=0; let n=parseInt(hex.slice(1),16); if(!isFinite(n))return '#888888';
@@ -3486,11 +3525,20 @@ const encounters=[], corpses=[]; let scarGrid=null, encTimer=22;
 /* ===== RAID GORE FX — airborne blood sprays, persistent ground stains, collapse debris.
    All purely cosmetic: they NEVER write to economy/value (scars + dev still own that). ===== */
 const sprays=[], stains=[], debris=[], clashSparks=[];
-function addClashSpark(x,y){ if(clashSparks.length>40)clashSparks.shift();
-  for(let k=0;k<5+((Math.random()*4)|0);k++){ const a=Math.random()*6.283, sp=1.4+Math.random()*2.6;
+/* ===== BRUTALITY SCALE — per spec §4/§11, violence should ramp through the war ages and hit
+   "rock bottom" in Sengoku, while staying gentler in the early/peaceful ages. One small read of
+   S.era applied at the actual hit/clash moments (spray count, spark count) rather than threaded
+   through every timing constant — escalation should be felt in IMPACT, not in pacing. */
+function brutalityScale(){ const era=(typeof S!=='undefined')?S.era:3;
+  if(era===7) return 1.45;          // Sengoku — rock bottom, per spec
+  if(era===6) return 1.2;           // Kamakura — hardening, the slide already underway
+  if(era<=1) return 0.85;           // Jomon/Yayoi — primeval but not yet this violent
+  return 1.0; }
+function addClashSpark(x,y){ if(clashSparks.length>40)clashSparks.shift(); const bs=brutalityScale();
+  for(let k=0;k<Math.round((5+((Math.random()*4)|0))*bs);k++){ const a=Math.random()*6.283, sp=(1.4+Math.random()*2.6)*bs;
     clashSparks.push({ x,y, h:3+Math.random()*2.5, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp*0.6, vh:4+Math.random()*4,
       life:0, max:0.22+Math.random()*0.12 }); } }
-function addSpray(x,y,n,power){ power=power||1; for(let k=0;k<n;k++){ const a=Math.random()*6.283, sp=(0.5+Math.random()*1.7)*power;
+function addSpray(x,y,n,power){ power=(power||1)*brutalityScale(); for(let k=0;k<n;k++){ const a=Math.random()*6.283, sp=(0.5+Math.random()*1.7)*power;
   sprays.push({ x, y, h:(2+Math.random()*4), vx:Math.cos(a)*sp, vy:Math.sin(a)*sp*0.6, vh:2.4+Math.random()*3.2,
     r:0.5+Math.random()*1.3, life:0, max:1.0+Math.random()*0.6 }); } }
 function addStain(x,y,amt){ if(stains.length>260)stains.shift();
@@ -3527,38 +3575,72 @@ function spawnDefenders(tx,ty,n){ const arr=[];
   return arr; }
 
 /* armed retainers — a household that rolled defended-resistance gets real swords, not just bodies to duel through.
-   Drawn identically to plain defenders (drawDefender doesn't care), but they fight back via roninCombatTick-on-mob. */
-function armDefenders(defenders){ for(const d of defenders) d.guard=true; }
+   Drawn identically to plain defenders (drawDefender doesn't care), but they fight back via roninCombatTick-on-mob.
+   weapon must match what drawGuardWeapon actually draws (sickle for farmer kits, bo otherwise) or the combat math
+   (engage distance, cut pool) disagrees with what's on screen. One retainer per armed household has a chance to be
+   a NAMED veteran — tougher (extra hit before falling) and called out by name in the toast, a cheap way to make
+   "the household fights back" occasionally feel like a specific person rather than a generic statistic. */
+function armDefenders(defenders){
+  let namedRolled=false;
+  for(const d of defenders){ d.guard=true; d.weapon=(d.kit&&d.kit.type==='farmer')?'sickle':'bo';
+    if(!namedRolled && Math.random()<0.22){ namedRolled=true; d.named=RETAINER_NAMES[(Math.random()*RETAINER_NAMES.length)|0]; d.toughHits=1; } }
+  return namedRolled?defenders.find(d=>d.named):null;
+}
+const RETAINER_NAMES=['Genzo','Hachirobei','Tadaoki','Kuranosuke','Shinpachi','Mokuemon'];
 
 function updateDefenders(e,dt){ if(!e.defenders)return;
-  for(const d of e.defenders){ if(d.state==='struck'){ d.t+=dt; if(d.t>0.4){ raidKill(e,d.x,d.y); d.state='down'; } } } }
+  for(const d of e.defenders){
+    if(d.state==='struck'){ d.t+=dt; if(d.t>0.4){ raidKill(e,d.x,d.y); d.state='down'; } }
+    else if(d.state==='flee'){ const dx=d.x-e.rtx,dy=d.y-e.rty,dd=Math.hypot(dx,dy)||1; d.x+=dx/dd*1.8*dt; d.y+=dy/dd*1.8*dt; d.dir=dx<0?-1:1; } } }
 
-/* a blade actually connects with a person — the direct cause of the body that follows */
-function landHit(e,m,tgt){ tgt.state='struck'; tgt.t=0; tgt.recoilDX=(m.dir||1)*0.3; tgt.recoilDY=-0.1;
-  addSpray(tgt.x,tgt.y,7+((Math.random()*6)|0), 1.0+(m.swingType==='sweep'?0.5:m.swingType==='thrust'?0.3:0));
+/* a blade actually connects with a person — the direct cause of the body that follows.
+   A named retainer's first hit is absorbed (toughHits) as a stagger, not a fall — gives the
+   one called-out defender in an armed household a beat of visibly outlasting the rest. */
+function landHit(e,m,tgt){
+  // FINISHING BLOW — check BEFORE this hit lands whether tgt is the last one still standing.
+  // The household's last fall should read as a beat, not just another struck-defender tick.
+  const others=e.defenders?e.defenders.filter(d=>d!==tgt):[];
+  const isLast=tgt.toughHits<=0 && others.length>0 && others.every(d=>d.state==='down'||d.state==='flee');
+  addSpray(tgt.x,tgt.y,(isLast?12:7)+((Math.random()*6)|0), (isLast?1.5:1.0)+(m.swingType==='sweep'?0.5:m.swingType==='thrust'?0.3:0));
+  if(isLast) addClashSpark(tgt.x,tgt.y);
+  if(window.SoruBattleSFX) window.SoruBattleSFX.impact({weight:m.swingType, gain:isLast?1.3:1});
+  if(tgt.toughHits>0){ tgt.toughHits--; tgt.flinchT=0.3; tgt.recoilDX=(m.dir||1)*0.25; tgt.recoilDY=-0.08;
+    if(typeof toast==='function') toast('⚔️ '+tgt.named+' staggers','the retainer takes the cut and stays on his feet');
+    return; }
+  tgt.state='struck'; tgt.t=0; tgt.recoilDX=(m.dir||1)*0.3; tgt.recoilDY=-0.1;
   e.struck=(e.struck||0)+1;
-  if(window.SoruBattleSFX) window.SoruBattleSFX.impact({weight:m.swingType});
-  if(typeof toast==='function' && e.struck===1) toast('🩸 Steel finds flesh','the household falls under the blades'); }
+  if(typeof toast==='function'){
+    if(isLast) toast(tgt.named?'🩸 '+tgt.named+' is the last to fall':'🩸 The last of the household falls','no one left at the door');
+    else if(tgt.named) toast('🩸 '+tgt.named+' falls','the named retainer goes down under the blades');
+    else if(e.struck===1) toast('🩸 Steel finds flesh','the household falls under the blades'); } }
 
 /* mirror of landHit, but the VICTIM is an attacking ronin — fired when an armed guard's
    swing connects. Ronin don't get the soft 0.4s "struck" grace window defenders get;
    they drop fast once cut, since this is meant to feel like a real reversal, not a slog. */
 function landHitOnRonin(e,guard,ronin){ ronin.hp=(ronin.hp==null?1:ronin.hp)-1;
   ronin.flinchT=0.22; ronin.dir=(guard.dir||1)*-1;
-  addSpray(ronin.x,ronin.y,6+((Math.random()*5)|0), 0.9+(guard.swingType==='sweep'?0.4:0));
-  if(window.SoruBattleSFX) window.SoruBattleSFX.impact({weight:guard.swingType});
-  if(ronin.hp<=0 && ronin.state!=='down'){ ronin.state='down'; ronin.downT=0;
+  const willDrop=ronin.hp<=0 && ronin.state!=='down';
+  const othersStanding=willDrop && e.mob ? e.mob.filter(m=>m!==ronin && m.state!=='down' && m.state!=='flee').length : -1;
+  const isLastRonin=willDrop && othersStanding===0;
+  addSpray(ronin.x,ronin.y,(isLastRonin?9:6)+((Math.random()*5)|0), (isLastRonin?1.3:0.9)+(guard.swingType==='sweep'?0.4:0));
+  if(isLastRonin) addClashSpark(ronin.x,ronin.y);
+  if(window.SoruBattleSFX) window.SoruBattleSFX.impact({weight:guard.swingType, gain:isLastRonin?1.3:1});
+  if(willDrop){ ronin.state='down'; ronin.downT=0;
     addSpray(ronin.x,ronin.y,10+((Math.random()*6)|0),1.5); addStain(ronin.x,ronin.y,0.55+Math.random()*0.25);
     corpses.push({ x:ronin.x, y:ronin.y, t:0, life:26, lethal:true, skin:ronin.skin||'#d8ad82', col:ronin.col||'#2c2a30',
       obi:ronin.obi||'#3a2230', blood:1, parts:makeParts(ronin.x,ronin.y,ronin.skin||'#d8ad82',ronin.col||'#2c2a30'), vic:null, vicIsTraffic:false });
     e.ronDown=(e.ronDown||0)+1;
-    if(typeof toast==='function' && e.ronDown===1) toast('⚔️ Steel turned back','a ronin falls in the street'); } }
+    if(typeof toast==='function'){
+      if(isLastRonin) toast('⚔️ The last ronin falls','the warband is finished, blade by blade');
+      else if(e.ronDown===1) toast('⚔️ Steel turned back','a ronin falls in the street'); } } }
 
 /* per-guard duel cycle, symmetric to roninCombatTick: seek a living attacker, close, wind up, cut, recover.
    Only runs for e.defenders that have .guard===true and only during 'duel' (the resistance-roll branch). */
 function guardCombatTick(e,d,dt,mob){
+  if(d.state==='flee'){ const dx=d.x-e.rtx,dy=d.y-e.rty,dd=Math.hypot(dx,dy)||1; d.x+=dx/dd*1.8*dt; d.y+=dy/dd*1.8*dt; d.dir=dx<0?-1:1; return; }
   if(d.blockT>0){ d.blockT-=dt; if(d.blockT<0)d.blockT=0; }
   if(d.dodgeT>0){ d.dodgeT-=dt; if(d.dodgeT<0)d.dodgeT=0; }
+  const kit=kitFor(d.weapon?d:{weapon:'bo'}), engage=kit.engage;                        // unarmed-looking guards still swing a bo by default
   if(d.wind>0){ d.wind-=dt; const tgt=mob[d.target]; if(tgt){ const dx=tgt.x-d.x; d.dir=dx<0?-1:1;
       // a defender watching an incoming cut gets one chance to brace or break away before it lands —
       // reacts partway through the ronin's windup, same generous timing as the mirrored check above
@@ -3570,30 +3652,60 @@ function guardCombatTick(e,d,dt,mob){
     if(tgt){ const dx=tgt.x-d.x; d.dir=dx<0?-1:1;
       const elapsed=1-(d.swing/(d.swingMax||0.4)), cf=(d.swingType==='thrust')?0.5:(d.swingType==='sweep'?0.6:0.65);
       if(!d.hitFired && elapsed>=cf){ d.hitFired=true;
-        if(tgt.state==='down'){ /* target already down — clean whiff, no contact sound */ }
+        if(tgt.state==='down'||tgt.state==='flee'){ /* target already down or routed — clean whiff, no contact sound */ }
         else if(tgt.blockT>0){ addClashSpark(d.x,d.y); if(window.SoruBattleSFX) window.SoruBattleSFX.parry({weight:d.swingType}); tgt.blockT=Math.max(0,tgt.blockT-0.08); }
         else if(tgt.dodgeT>0){ if(window.SoruBattleSFX) window.SoruBattleSFX.parry({weight:d.swingType,gain:0.5}); }
         else landHitOnRonin(e,d,tgt); } }
-    if(d.swing<=0){ d.swing=0; const rTab={thrust:0.16,diag:0.24,chop:0.30,sweep:0.34}; d.recover=(rTab[d.swingType]||0.24)+Math.random()*0.10; } return; }
+    if(d.swing<=0){ d.swing=0; const rTab={thrust:0.16,diag:0.24,chop:0.30,sweep:0.34}; d.recover=(rTab[d.swingType]||0.24)*kit.swingMul+Math.random()*0.10; } return; }
   if(d.recover>0){ d.recover-=dt; if(d.recover<0)d.recover=0; return; }
-  if(d.target==null || !mob[d.target] || mob[d.target].state==='down'){
-    let best=-1,bd=1e9; for(let k=0;k<mob.length;k++){ const m=mob[k]; if(m.state==='down')continue;
+  if(d.target==null || !mob[d.target] || mob[d.target].state==='down' || mob[d.target].state==='flee'){
+    let best=-1,bd=1e9; for(let k=0;k<mob.length;k++){ const m=mob[k]; if(m.state==='down'||m.state==='flee')continue;
       const dist=Math.hypot(m.x-d.x,m.y-d.y); if(dist<bd){bd=dist;best=k;} }
     d.target=best>=0?best:null; }
   if(d.target==null) return;
   const tgt=mob[d.target], dx=tgt.x-d.x,dy=tgt.y-d.y,dist=Math.hypot(dx,dy)||1;
-  if(dist>0.8){ d.x+=dx/dist*1.5*dt; d.y+=dy/dist*1.5*dt; d.dir=dx<0?-1:1;
+  if(dist>engage){ d.x+=dx/dist*1.5*dt; d.y+=dy/dist*1.5*dt; d.dir=dx<0?-1:1;
     d.circ=(d.circ||0)+dt*0.6; d.x+=Math.cos(d.circ)*0.18*dt; d.y+=Math.sin(d.circ)*0.10*dt; }   // closing footwork drifts, not a straight beeline
-  else { d.dir=dx<0?-1:1; const types=['chop','diag','thrust']; d.swingType=types[(Math.random()*types.length)|0];
-    d.wind=0.16+Math.random()*0.10; d.windMax=d.wind; d.swingMax=(d.swingType==='thrust')?0.34:0.40; } }
+  else { d.dir=dx<0?-1:1; const types=kit.types; d.swingType=types[(Math.random()*types.length)|0];
+    d.wind=(0.16+Math.random()*0.10)*kit.windMul; d.windMax=d.wind; d.swingMax=((d.swingType==='thrust')?0.34:0.40)*kit.swingMul; } }
+
+/* ===== WEAPON KIT TABLE — reach/engage distance and the cut set each weapon draws from.
+   Previously `weapon:'yari'|'katana'` only changed the idle pose; it never touched timing
+   or range. yari trades cut variety for a longer reach and a faster, narrower thrust — a
+   spearman should keep a katana-ronin at arm's length, not just look different standing still.
+   Guard improvised weapons (bo/sickle) hang off the same table so one stat source drives
+   both combat math and the existing drawRonin/drawGuardWeapon poses. ===== */
+const WEAPON_KIT = {
+  katana:  { engage:0.8,  types:['chop','diag','sweep','thrust'], windMul:1.00, swingMul:1.00 },
+  yari:    { engage:1.15, types:['thrust','diag'],                windMul:0.85, swingMul:0.92 },  // reach keeps it out of sweep/chop range, mostly thrusts
+  bo:      { engage:0.85, types:['chop','diag'],                  windMul:1.05, swingMul:1.05 },  // blunt — no thrust, slower to recover
+  sickle:  { engage:0.65, types:['chop','diag'],                  windMul:0.80, swingMul:0.85 }   // short reach, quick snapping cuts
+};
+function kitFor(a){ return WEAPON_KIT[a.weapon] || WEAPON_KIT.katana; }
+
+/* ===== MORALE — a warband (or a defending household) that's lost most of its fighters
+   shouldn't keep trading blows to the literal last man; real skirmishers break. Checked
+   once per group per raid-tick from updateRaid, not per-combatant, so the whole side turns
+   at once rather than peeling off one at a time (which read as confused, not routed). ===== */
+function checkMorale(e,group,isRonin){
+  const total=group.length; if(total===0)return false;
+  const standing=group.filter(g=>g.state!=='down').length;
+  if(standing===0||standing===total)return false;                 // nothing left to break, or no losses yet
+  const ratio=standing/total;
+  if(ratio>0.4)return false;                                       // still has enough of the warband/household to hold
+  const brokenKey=isRonin?'ronMorale':'defMorale'; if(e[brokenKey])return false;
+  e[brokenKey]=true; return true;
+}
 
 /* per-ronin duel cycle: seek a living defender → close the gap → wind up a STANCE → cut → recover → repeat.
    The hit is timestamped to the swing itself (fires once, partway through the strike) — combat, not coincidence. */
 function roninCombatTick(e,m,dt,defenders,rtx,rty){
   if(m.state==='down') return;                                                          // dead weight — out of the fight
+  if(m.state==='flee'){ const dx=m.x-rtx,dy=m.y-rty,d=Math.hypot(dx,dy)||1; m.x+=dx/d*m.spd*1.6*dt; m.y+=dy/d*m.spd*1.6*dt; m.dir=dx<0?-1:1; m.ph+=dt*9; return; }
   if(m.flinchT>0){ m.flinchT-=dt; if(m.flinchT<=0)m.flinchT=0; return; }                  // staggered by a counter-hit
   if(m.blockT>0){ m.blockT-=dt; if(m.blockT<0)m.blockT=0; }
   if(m.dodgeT>0){ m.dodgeT-=dt; if(m.dodgeT<0)m.dodgeT=0; }
+  const kit=kitFor(m), engage=kit.engage;
   if(m.wind>0){ m.wind-=dt; const tgt=defenders[m.target]; if(tgt){ const dx=tgt.x-m.x; m.dir=dx<0?-1:1;
       // the defender is watching THIS ronin's windup (the tell) — reacts partway through, leaving enough
       // time for the block/dodge animation to actually establish before the cut lands at swing completion
@@ -3608,18 +3720,25 @@ function roninCombatTick(e,m,dt,defenders,rtx,rty){
         else if(tgt.blockT>0){ addClashSpark(m.x,m.y); if(window.SoruBattleSFX) window.SoruBattleSFX.parry({weight:m.swingType}); tgt.blockT=Math.max(0,tgt.blockT-0.08); }
         else if(tgt.dodgeT>0){ if(window.SoruBattleSFX) window.SoruBattleSFX.parry({weight:m.swingType,gain:0.5}); }
         else landHit(e,m,tgt); } }
-    if(m.swing<=0){ m.swing=0; const rTab={thrust:0.16,diag:0.24,chop:0.30,sweep:0.34}; m.recover=(rTab[m.swingType]||0.24)+Math.random()*0.10; } return; }
+    if(m.swing<=0){ m.swing=0; const rTab={thrust:0.16,diag:0.24,chop:0.30,sweep:0.34}; m.recover=(rTab[m.swingType]||0.24)*kit.swingMul+Math.random()*0.10; } return; }
   if(m.recover>0){ m.recover-=dt; if(m.recover<0)m.recover=0; return; }
   if(m.target==null || !defenders[m.target] || defenders[m.target].state!=='idle'){
-    let best=-1,bd=1e9; for(let k=0;k<defenders.length;k++){ const d=defenders[k]; if(d.state!=='idle')continue;
-      const dist=Math.hypot(d.x-m.x,d.y-m.y); if(dist<bd){bd=dist;best=k;} }
-    m.target=best>=0?best:null; }
+    // FLANKING: prefer a defender someone else in the warband is ALREADY engaged with over the
+    // nearest free one — ganging up reads as a real attack, not four duels happening to overlap.
+    // Falls back to nearest-free when nobody's engaged yet (opening seconds of the fight).
+    let best=-1,bd=1e9,bestEngaged=-1,bdE=1e9;
+    for(let k=0;k<defenders.length;k++){ const d=defenders[k]; if(d.state!=='idle')continue;
+      const dist=Math.hypot(d.x-m.x,d.y-m.y);
+      if(dist<bd){bd=dist;best=k;}
+      if(d.engagedBy>0 && dist<bdE){bdE=dist;bestEngaged=k;} }
+    m.target=bestEngaged>=0?bestEngaged:(best>=0?best:null);
+    if(m.target!=null){ const t=defenders[m.target]; t.engagedBy=(t.engagedBy||0)+1; m._tracked=m.target; } }
   if(m.target==null){ const dx=rtx-m.x,dy=rty-m.y,d=Math.hypot(dx,dy)||1; m.dir=dx<0?-1:1; return; }   // no one left standing — wait for destruct
   const tgt=defenders[m.target], dx=tgt.x-m.x,dy=tgt.y-m.y,d=Math.hypot(dx,dy)||1;
-  if(d>0.8){ m.x+=dx/d*m.spd*1.25*dt; m.y+=dy/d*m.spd*1.25*dt; m.dir=dx<0?-1:1; m.ph+=dt*9;
+  if(d>engage){ m.x+=dx/d*m.spd*1.25*dt; m.y+=dy/d*m.spd*1.25*dt; m.dir=dx<0?-1:1; m.ph+=dt*9;
     m.circ=(m.circ||Math.random()*6.28)+dt*0.7; m.x+=Math.cos(m.circ)*0.2*dt; m.y+=Math.sin(m.circ)*0.11*dt; }          // close the gap, with live footwork drift
-  else { m.dir=dx<0?-1:1; const types=['chop','diag','sweep','thrust']; m.swingType=types[(Math.random()*types.length)|0];   // varied cuts, no repeating arc
-    m.wind=0.14+Math.random()*0.10; m.windMax=m.wind; m.swingMax=(m.swingType==='thrust')?0.34:(m.swingType==='sweep'?0.42:0.40); tgt.tellSeen=false; } }
+  else { m.dir=dx<0?-1:1; const types=kit.types; m.swingType=types[(Math.random()*types.length)|0];   // varied cuts, no repeating arc — pool drawn from the weapon kit
+    m.wind=(0.14+Math.random()*0.10)*kit.windMul; m.windMax=m.wind; m.swingMax=((m.swingType==='thrust')?0.34:(m.swingType==='sweep'?0.42:0.40))*kit.swingMul; tgt.tellSeen=false; } }
 
 /* staged raid driver — approach → [duel?] → assault → destruct → collapse → aftermath → disperse.
    The building consequence (applyRaid) is DEFERRED all the way to 'collapse', and is SKIPPED
@@ -3641,9 +3760,11 @@ function updateRaid(e,dt,near){ e.st+=dt; const arson=e.raidAction==='arson'; co
           // not a fair fight as the spec intends, just a near-guaranteed attacker win.
           const reinforce=spawnDefenders(e.rtx,e.rty,1+((Math.random()*2)|0));
           e.defenders=e.defenders.concat(reinforce);
-          armDefenders(e.defenders);
-          if(typeof toast==='function') toast(arson?'⚔️ Guards in the smoke':'⚔️ Steel meets steel',
-            arson?'retainers turn on the torchbearers':'defending ronin draw against the warband');
+          const named=armDefenders(e.defenders);
+          if(typeof toast==='function'){
+            if(named) toast('⚔️ '+named.named+' draws steel', arson?'a retainer of the household turns on the torchbearers':'a retainer of the household turns on the warband');
+            else toast(arson?'⚔️ Guards in the smoke':'⚔️ Steel meets steel',
+              arson?'retainers turn on the torchbearers':'defending ronin draw against the warband'); }
           e.state='duel'; e.st=0; }
         else { e.state='assault'; e.st=0;
           if(typeof toast==='function') toast(arson?'🔥 Torchbearers reach it':'🏴 The warband reaches it',
@@ -3663,14 +3784,25 @@ function updateRaid(e,dt,near){ e.st+=dt; const arson=e.raidAction==='arson'; co
       }
       // tend struck defenders the same way the plain assault does (struck → down after 0.4s)
       for(const d of e.defenders){ if(d.state==='struck'){ d.t=(d.t||0)+dt; if(d.t>0.4){ raidKill(e,d.x,d.y); d.state='down'; } } }
-      const defendersLeft=e.defenders.some(d=>d.state!=='down');
-      const roninLeft=e.mob.some(m=>m.state!=='down');
+      // MORALE — a side down to a remnant breaks and runs rather than fighting to the last man.
+      // Ronin who flee are removed from targeting (handled inside both *CombatTick functions via
+      // state==='flee' checks) but stay in e.mob so disperse/cleanup logic still sees them.
+      // Fled defenders survive (no corpse, no scar) — they're routed, not cut down — but no longer
+      // hold the line, so the household reads as cleared for the purposes of what happens next.
+      if(checkMorale(e,e.mob,true)){
+        for(const m of e.mob) if(m.state!=='down'){ m.state='flee'; m.wind=0; m.swing=0; m.flinchT=0; }
+        if(typeof toast==='function') toast('🏴 Warband breaks','the survivors turn and run for the road'); }
+      if(checkMorale(e,e.defenders,false)){
+        for(const d of e.defenders) if(d.state==='idle'){ d.state='flee'; d.wind=0; d.swing=0; }
+        if(typeof toast==='function') toast('🏃 Household flees','the defenders scatter rather than die at the door'); }
+      const defendersLeft=e.defenders.some(d=>d.state==='idle'||d.state==='struck');
+      const roninLeft=e.mob.some(m=>m.state!=='down'&&m.state!=='flee');
       // slight thumb on the scale for the attacker, per spec — only matters when both sides still have fighters
-      if(!roninLeft){                                       // ATTACKERS BROKEN — raid repelled
+      if(!roninLeft){                                       // ATTACKERS BROKEN OR ROUTED — raid repelled
         e.state='repelled'; e.st=0;
         if(typeof toast==='function') toast(arson?'🛡 Arson repelled':'🛡 Raid repelled',
           arson?'the torchbearers are cut down in the street':'the warband is driven off, blades broken');
-      } else if(!defendersLeft){                            // household cut down — proceeds exactly like the old one-sided assault
+      } else if(!defendersLeft){                            // household cut down or routed — proceeds exactly like the old one-sided assault
         e.state='assault'; e.st=1.5;                         // skip ahead since the duel already did the work of clearing them
         if(arson){ if(c)c.burn=1; disasterT=Math.max(disasterT,5); if(typeof playFireBell==='function')playFireBell(true); }
       } else if(e.st>9){                                      // duel drags on too long — break ties (now a fair coin flip; reinforcements above already give the attacker their edge through numbers, not a rigged tiebreak)
@@ -4533,7 +4665,10 @@ function drawDefender(g,cx,cy,z,d){
     g.restore();
     if(d.t<0.13){ g.save(); g.globalCompositeOperation='lighter'; g.fillStyle='rgba(255,235,225,'+(0.6*(1-d.t/0.13))+')';   // contact flash where steel met flesh
       g.beginPath();g.arc(cx+d.recoilDX*3*z,cy-6*z,2.6*z,0,7);g.fill(); g.restore(); }
-    drawBlood(g,cx,cy+1*z,z,0.5+p*0.3); } }
+    drawBlood(g,cx,cy+1*z,z,0.5+p*0.3); return; }
+  if(d.state==='flee'){ shadowEllipse(g,cx,cy,2.6,z);                                    // morale broke — running for the road, not standing the ground
+    d.kit.moving=true; d.kit.ph=(d.kit.ph||0)+0.32;
+    drawPerson(g,cx,cy,z,d.kit,d.dir,1); } }
 
 /* improvised weapon for an armed household guard — a wooden bo staff by default, or a
    farm sickle when the kit rolled 'farmer'. Deliberately plainer than drawRonin's katana
@@ -4897,7 +5032,9 @@ advanceBtn.onclick=()=>{ if(S.era>=ERAS.length-1){advise('<b>Quantum Edo</b> —
    Sets S.era directly, skips Kami/turn logic entirely, then refreshes everything
    that's keyed off era: build menu gating, electricity flag, HUD text, and the
    render cache (worldKey() already includes S.era, so bumping gridVersion just
-   forces an immediate repaint rather than waiting on the next natural redraw). */
+   forces an immediate repaint rather than waiting on the next natural redraw).
+   Lives inside the Options modal (not a floating panel) so it never sits on top
+   of the canvas blocking the view during normal play — see optDevEraRow. */
 function jumpToEra(n){
   n=clamp(n|0,0,ERAS.length-1); if(n===S.era)return;
   S.era=n; S.electricity=researchedElectric();
@@ -4907,33 +5044,28 @@ function jumpToEra(n){
 }
 let _devEraBtns=null;
 function updateDevEraPanel(){ if(!_devEraBtns)return;
-  _devEraBtns.forEach((b,i)=>b.classList.toggle('on',i===S.era)); }
+  _devEraBtns.forEach((b,i)=>b.classList.toggle('on',i===S.era));
+  const val=document.getElementById('optDevEraVal'); if(val)val.textContent=ERAS[S.era].nm; }
 function initDevEraSwitch(){
-  if(!DEV_ERA_SWITCH)return;
-  const wrap=document.createElement('div');
-  wrap.id='devEraPanel';
-  wrap.style.cssText='position:fixed;top:48px;right:8px;z-index:10001;display:flex;flex-direction:column;gap:3px;'
-    +'background:linear-gradient(#1b1f24,#101317);border:1px solid var(--edge);border-radius:6px;'
-    +'box-shadow:0 2px 10px rgba(0,0,0,.6);padding:6px;font:11px/1.2 ui-monospace,Menlo,monospace;max-width:128px;';
-  const label=document.createElement('div');
-  label.textContent='DEV · ERA JUMP'; label.style.cssText='color:var(--muted);font-weight:700;letter-spacing:.04em;padding:0 2px 2px;font-size:9px;';
-  wrap.appendChild(label);
+  const row=document.getElementById('optDevEraRow'); if(!row)return;
+  if(!DEV_ERA_SWITCH){ row.style.display='none'; return; }
+  row.style.display='';
+  const host=document.getElementById('optDevEraBtns'); host.innerHTML='';
   _devEraBtns=ERAS.map((e,i)=>{
     const b=document.createElement('button');
     b.type='button'; b.textContent=i+' · '+e.nm;
-    b.style.cssText='all:unset;cursor:pointer;display:block;width:100%;padding:4px 6px;border-radius:4px;'
-      +'color:var(--ink);font:inherit;white-space:nowrap;';
-    b.onmouseenter=()=>{ if(i!==S.era)b.style.background='#262b31'; };
-    b.onmouseleave=()=>{ if(i!==S.era)b.style.background=''; };
+    b.style.cssText='all:unset;cursor:pointer;padding:5px 8px;border-radius:4px;'
+      +'color:var(--ink);font:11px/1.2 ui-monospace,Menlo,monospace;white-space:nowrap;'
+      +'background:#262b31;border:1px solid var(--edge);';
+    b.onmouseenter=()=>{ if(i!==S.era)b.style.background='#323840'; };
+    b.onmouseleave=()=>{ if(i!==S.era)b.style.background='#262b31'; };
     b.onclick=()=>jumpToEra(i);
-    wrap.appendChild(b);
+    host.appendChild(b);
     return b;
   });
-  // 'on' state styling (mirrors .res/tool button accent rather than fighting the inline style above)
   const styleEl=document.createElement('style');
-  styleEl.textContent='#devEraPanel button.on{background:var(--sol);color:#06311f;font-weight:700;}';
+  styleEl.textContent='#optDevEraBtns button.on{background:var(--sol)!important;color:#06311f;font-weight:700;border-color:var(--sol)!important;}';
   document.head.appendChild(styleEl);
-  document.body.appendChild(wrap);
   updateDevEraPanel();
 }
 initDevEraSwitch();
@@ -4955,6 +5087,7 @@ function openOptions(){
   optMusicVol.value=mv; optMusicVal.textContent=mv+'%';
   optSfxVol.value=sv; optSfxVal.textContent=sv+'%';
   optNoWeather.checked=!!optGet('opt_noWeather',false);
+  updateDevEraPanel();
   document.getElementById('optModal').classList.add('show');
 }
 document.getElementById('optionsBtn').onclick=openOptions;
