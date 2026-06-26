@@ -520,12 +520,11 @@ function cleanPerimeter(){
   // distant satellites further out in the void for the floating-diorama feel.
   let mcx=0,mcy=0; for(const[x,y]of comps[0].tiles){mcx+=x;mcy+=y;} mcx/=comps[0].size; mcy/=comps[0].size;
   let mainR=0; for(const[x,y]of comps[0].tiles){ const d=Math.hypot(x-mcx,y-mcy); if(d>mainR)mainR=d; }
-  const KEEP=4, MINK=4, MAXK=16; let kept=0;
+  const KEEP=0, MINK=1e9, MAXK=1e9; let kept=0;
   for(let i=1;i<comps.length;i++){ const c=comps[i]; let keep=false;
     let ccx=0,ccy=0; for(const[x,y]of c.tiles){ccx+=x;ccy+=y;} ccx/=c.size; ccy/=c.size;
     const distOut=Math.hypot(ccx-mcx,ccy-mcy)-mainR;        // how far beyond the main shore this chunk sits
-    if(c.size>MAXK && distOut>2.0) keep=true;               // a genuine secondary landmass, clearly separated
-    else if(c.size>=MINK && distOut>1.2 && kept<KEEP){ keep=true; kept++; }  // several well-separated floating shards, some close enough to read as calved-off ice — the broken edge shouldn't end on one single clean front
+    // ALL detached land masses dissolved — only the single main island survives in the void
     if(keep)continue;
     for(const[x,y]of c.tiles){ const cc=grid[y][x]; cc.ter=WATER; cc.h=0; cc.spirit=0; cc.frozen=0; cc.tundra=0;
       cc.coast=false; cc.shore=false; cc.road=0; cc.wire=0; cc.zone=0; cc.civ=0; }   // dissolve to void
@@ -651,6 +650,10 @@ function genMap(){ grid.length=0;
       if(dn>0.82){ const rr=0.5*inoise(x*0.16+7,y*0.16+13)+0.32*inoise(x*0.07+71,y*0.07+53)+0.18*inoise(x*0.035+19,y*0.035+61); c.ter=(rr<0.14?ROCK:BARE); c.tundra=1; }   // pockets in the rim stay frozen, coherent drift patches
       else { const r=inoise(x*0.5+9,y*0.5+2); c.ter=(r<0.105?FOREST:(r<0.45?GRASS2:GRASS)); } } }   // matches lowered forest threshold above
   if(VOID){ cleanPerimeter(); carveSpiritWater(elevG); }   // cull stray floating debris, then add subtle river + pond
+  if(VOID){ // NO COLD RIM: dissolve the old frozen-tundra ring into ordinary land so the island
+            // reads as ONE clean uniform landmass — the painted shoreline mass alone carries the edge.
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){ const c=grid[y][x]; if(!c.tundra)continue; c.tundra=0; c.frozen=0;
+      if(c.ter===ROCK||c.ter===BARE||c.ter===SNOW){ const r=inoise(x*0.5+9,y*0.5+2); c.ter=(r<0.105?FOREST:(r<0.45?GRASS2:GRASS)); } } }
   for(let y=0;y<H;y++)for(let x=0;x<W;x++){ if(grid[y][x].ter!==WATER)continue;
     for(const[dx,dy]of NEIGH){const ax=x+dx,ay=y+dy; if(inB(ax,ay)&&grid[ay][ax].ter!==WATER){grid[y][x].coast=true;break;}} }
   // land tiles that touch the sea — flagged for the painterly coastline pass
@@ -1311,6 +1314,14 @@ function paintFrozenEdge(g,tx,ty,c,cx,cy,hw,hh,z){
 /* FROZEN TUNDRA: barren icy ground forming the cold rim — pale desaturated grey-blue, quiet and
    treeless, with rare tasteful Solana crystal specks. Keeps the sumi-e mono feel but reads cold. */
 function drawTundra(g,tx,ty,c,cx,cy,z,t){ const hw=TW/2*z,hh=TH/2*z;
+  // RIM DISSOLVE: the outer tundra ring fades into the painted shoreline cliff beneath it
+  // (drawn first in rebuildWorld). Near-invisible at the silhouette, ramping to full a few tiles
+  // inland — so the eye reads one continuous painted edge melting into the void, not a field of
+  // noisy grey diamonds. Below the floor the tile is skipped entirely; the clean mass shows through.
+  ensureEdgeDist();
+  const ed=_edgeDist?_edgeDist[ty][tx]:9;
+  let AL=(ed-0.3)/3.4; AL=AL<=0?0:(AL>=1?1:AL*AL*(3-2*AL));
+  if(AL<0.05) return;
   // RECOLOURED (was pale grey/cream/white -> read as a soft cotton/cloud mass smothering the
   // dark void-edge ink ribbon underneath). Now a dark, ink-washed broken stone/glacier-rock
   // palette consistent with the rest of the void rim — cool moonlit highlights stay thin
@@ -1340,13 +1351,13 @@ function drawTundra(g,tx,ty,c,cx,cy,z,t){ const hw=TW/2*z,hh=TH/2*z;
       if(i===0)g.moveTo(bx,by); else g.lineTo(bx,by); }
     g.closePath(); };
   blob(cx,cy,R,seed*6.28);
-  g.fillStyle=base; g.fill();
+  g.globalAlpha=AL; g.fillStyle=base; g.fill(); g.globalAlpha=1;
   const gw=g.createRadialGradient(cx,cy-hh*0.3,0,cx,cy,R*1.1); gw.addColorStop(0,lt); gw.addColorStop(0.6,base); gw.addColorStop(1,dk);
-  g.globalAlpha=0.5; blob(cx,cy,R,seed*6.28); g.fillStyle=gw; g.fill(); g.globalAlpha=1;
+  g.globalAlpha=0.5*AL; blob(cx,cy,R,seed*6.28); g.fillStyle=gw; g.fill(); g.globalAlpha=1;
   // FRACTURE CRACKS: 2-3 hard ink lines radiating across the tile, jagged (not straight),
   // so the surface itself reads as shattered ice sheet rather than a smooth painted patch.
-  g.globalAlpha=0.34; g.strokeStyle='rgba(8,8,10,0.85)'; g.lineWidth=0.6*z; g.lineJoin='miter'; g.lineCap='round';
-  const nCracks=2+((vhash(seed,303)*2)|0);
+  g.globalAlpha=0.22*AL; g.strokeStyle='rgba(8,8,10,0.85)'; g.lineWidth=0.6*z; g.lineJoin='miter'; g.lineCap='round';
+  const nCracks=AL>0.45?(1+((vhash(seed,303)*2)|0)):0;   // cracks only read well-inland; the rim stays a clean painted edge
   for(let ci=0;ci<nCracks;ci++){
     const a0=vhash(seed,ci*41+9)*6.28, len=R*(0.85+0.5*vhash(seed,ci*41+15));
     const midA=a0+(vhash(seed,ci*41+21)*2-1)*0.5, midR=len*(0.45+0.2*vhash(seed,ci*41+27));
@@ -1354,15 +1365,15 @@ function drawTundra(g,tx,ty,c,cx,cy,z,t){ const hw=TW/2*z,hh=TH/2*z;
     const ex=cx+Math.cos(a0)*len, ey=cy+Math.sin(a0)*len*0.62;
     g.beginPath(); g.moveTo(cx,cy); g.lineTo(mx,my); g.lineTo(ex,ey); g.stroke();
   }
-  g.globalAlpha=0.18; g.strokeStyle='rgba(180,196,210,0.55)'; g.lineWidth=0.55*z;   // thin cool moonrim facet — accent only, not a fill
+  g.globalAlpha=0.16*AL; g.strokeStyle='rgba(180,196,210,0.55)'; g.lineWidth=0.55*z;   // thin cool moonrim facet — accent only, not a fill
   g.beginPath(); g.moveTo(cx-hw*0.28,cy-hh*0.05); g.lineTo(cx+hw*0.05,cy-hh*0.34); g.lineTo(cx+hw*0.3,cy); g.stroke(); g.globalAlpha=1;
-  const sv=vhash(seed,77);                                                          // sparse Solana ice-crystal
-  if(sv>0.87){ g.globalAlpha=0.5; g.fillStyle=(sv>0.94?'#14f195':'#9945ff');
+  const sv=vhash(seed,77);                                                          // sparse Solana ice-crystal (inland only)
+  if(sv>0.87&&AL>0.7){ g.globalAlpha=0.5*AL; g.fillStyle=(sv>0.94?'#14f195':'#9945ff');
     const ax=cx+(vhash(seed,12)*2-1)*hw*0.4, ay=cy+(vhash(seed,13)*2-1)*hh*0.4;
     g.beginPath(); g.moveTo(ax,ay-2*z); g.lineTo(ax+1.4*z,ay); g.lineTo(ax,ay+2*z); g.lineTo(ax-1.4*z,ay); g.closePath(); g.fill(); g.globalAlpha=1; }
   // soft mottled wash speckle (replaces the old hard-stroked seam) so the surface itself reads
   // painterly rather than tiled
-  g.globalAlpha=0.14; g.fillStyle=dk;
+  g.globalAlpha=0.12*AL; g.fillStyle=dk;
   for(let i=0;i<4;i++){ const a=vhash(seed,200+i)*2-1, b=vhash(seed,210+i)*2-1, mx=cx+a*hw*0.7, my=cy+b*hh*0.7;
     g.beginPath(); g.arc(mx,my,hw*0.22,0,7); g.fill(); }
   g.globalAlpha=1;
@@ -1431,12 +1442,12 @@ function drawTerrain(g,tx,ty,c,cx,cy,z,t){ const hw=TW/2*z,hh=TH/2*z,k=c.ter; le
     g.lineCap='round'; g.lineJoin='round';
     for(const[a,b,nx,ny]of E){ const vd=isVoidFace(nx,ny);
       const nIsWater=inB(nx,ny)&&grid[ny][nx].ter===WATER;
-      if(!vd&&!nIsWater)continue;
-      const w = vd?2.4:1.4, al = vd?0.82:0.5;
-      g.strokeStyle='#140d07'; g.globalAlpha=al; g.lineWidth=w*z;
-      g.beginPath(); g.moveTo(a[0],a[1]); g.lineTo(b[0],b[1]); g.stroke();
-      if(vd){ g.strokeStyle='rgba(16,11,6,0.40)'; g.lineWidth=w*z*2.2;
-        g.beginPath(); g.moveTo(a[0],a[1]); g.lineTo(b[0],b[1]); g.stroke(); } }
+      // VOID faces: NO per-tile staircase outline — the smooth painted shoreline mass carries the
+      // island's silhouette, so the rim stays clean instead of reading as blocky inked diamonds.
+      if(vd) continue;
+      if(!nIsWater) continue;
+      g.strokeStyle='#140d07'; g.globalAlpha=0.5; g.lineWidth=1.4*z;
+      g.beginPath(); g.moveTo(a[0],a[1]); g.lineTo(b[0],b[1]); g.stroke(); }
     g.globalAlpha=1; }
   // painterly shoreline on coastal land (wet sand / eroded cliffs / foam)
   if(k!==WATER && c.shore) paintCoast(g,tx,ty,c,cx,cy,hw,hh,z,t);
@@ -2902,6 +2913,26 @@ function paintLandmassSilhouette(tg,z){
 // (not an angle-sort, which breaks on concave/branching coasts and produces a different,
 // self-intersecting order every time the camera moves — that was the stuttering-light bug).
 // Each ring is an ordered loop of [tx,ty] tile centres walking the actual land/void boundary.
+/* EDGE-DISTANCE FIELD — tiles from the nearest void/water, cached per gridVersion. Lets the
+   outer tundra rim fade smoothly into the painted shoreline cliff instead of stamping noisy
+   per-tile blobs right at the silhouette, so the rim reads as one continuous painted edge
+   dissolving into the void (Master Spec §10). */
+let _edgeDist=null,_edgeDistVer=-1;
+function ensureEdgeDist(){
+  if(_edgeDist&&_edgeDistVer===gridVersion)return;
+  const D=Array.from({length:H},()=>new Float32Array(W).fill(99));
+  let frontier=[];
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    if(grid[y][x].ter===WATER){ D[y][x]=0; frontier.push([x,y]); continue; }
+    for(const[dx,dy]of NEIGH){ if(!inB(x+dx,y+dy)){ D[y][x]=0; frontier.push([x,y]); break; } }  // grid border -> void beyond
+  }
+  let dist=0;
+  while(frontier.length&&dist<40){ const next=[]; dist++;
+    for(const[x,y]of frontier)for(const[dx,dy]of NEIGH){ const ax=x+dx,ay=y+dy;
+      if(inB(ax,ay)&&grid[ay][ax].ter!==WATER&&D[ay][ax]>dist){ D[ay][ax]=dist; next.push([ax,ay]); } }
+    frontier=next; }
+  _edgeDist=D; _edgeDistVer=gridVersion;
+}
 let _shoreRings=null, _shoreRingsVer=-1;
 function buildShoreRings(){
   const segs=new Map(); // key 'x1,y1,x2,y2' edge -> [ax,ay,bx,by] in world tile units, one edge per land/void boundary
@@ -2932,9 +2963,11 @@ function buildShoreRings(){
 function paintShorelineMass(g,z){
   if(_shoreRingsVer!==gridVersion) buildShoreRings();
   if(!_shoreRings||!_shoreRings.length)return;
-  const drop=Math.max(TW,TH)*z*0.62;
+  const drop=Math.max(TW,TH)*z*0.40;   // short, soft dissolve — no deep glacial cliff
   g.save();
+  let mainRing=_shoreRings[0]; for(const r of _shoreRings) if(r.length>mainRing.length) mainRing=r;
   for(const ring of _shoreRings){
+    if(ring!==mainRing) continue;   // CLEAN: only the island's outer silhouette; skip lake/river internal rings
     const scr=ring.map(([tx,ty])=>s2(tx,ty));
     let on=false; for(const[sx,sy]of scr){ if(sx>-TW*z*3&&sx<VW+TW*z*3&&sy>-TH*z*10&&sy<VH+TH*z*4){on=true;break;} }
     if(!on)continue;
@@ -2975,17 +3008,18 @@ function paintShorelineMass(g,z){
       const jag=(vhash(seedBase,Math.floor(u*30)*5.1+91)*2-1);
       const jag2=(vhash(seedBase,Math.floor(u*52)*8.3+331)*2-1);   // second, finer jag tap — breaks up any residual periodicity from the first
       const tBig=(u*6)%1, tMed=(u*16)%1;
-      const hugeAmp = TW*z*(2.4+seedBase*1.1);   // dominant term — this is what kills the "circle/diamond from afar" read
-      const lowAmp = TW*z*(1.35+seedBase*0.55);
-      const medAmp = TW*z*0.62;
-      const fineAmp = TW*z*0.12;
-      const jagAmp = TW*z*0.46;
-      const jag2Amp = TW*z*0.22;
+      const hugeAmp = TW*z*(0.70+seedBase*0.30);   // gentle large swing -> organic, never a perfect ellipse
+      const lowAmp  = TW*z*(0.36+seedBase*0.16);
+      const medAmp  = TW*z*0.16;
+      const fineAmp = TW*z*0.05;
       const huge_ = (huge+(huge2-huge)*tHuge);
       const low = (big+(big2-big)*tBig);
       const mid = (med+(med2-med)*tMed);
-      const disp = huge_*hugeAmp + low*lowAmp + mid*medAmp + fine*fineAmp + jag*jagAmp + jag2*jag2Amp;
-      pathPts.push([px+nx*disp, py+ny*disp, t<0.5? (grid[Math.max(0,Math.min(H-1,ring[segIdx][1]|0))][Math.max(0,Math.min(W-1,ring[segIdx][0]|0))].tundra||0) : 0]);
+      // outward bias keeps the silhouette ALWAYS just outside the tile footprint (so the wash
+      // body covers every rim tile and the edge dissolves cleanly), and the floor clamps off any
+      // inward spikes/debris. No jag terms -> a smooth, clean coastline.
+      const disp = Math.max(TW*z*0.12, TW*z*1.05 + huge_*hugeAmp + low*lowAmp + mid*medAmp + fine*fineAmp);
+      pathPts.push([px+nx*disp, py+ny*disp, 0]);
     }
     // smooth the displaced ring more heavily so neighbouring samples flow as one torn ink line
     // rather than a jittery zig-zag (still fully irregular, just not noisy-sharp) — a wider
@@ -2998,48 +3032,54 @@ function paintShorelineMass(g,z){
         nx2.push([(p0[0]+p1[0]*2+p2[0])/4,(p0[1]+p1[1]*2+p2[1])/4,p1[2]]); }
       sm=nx2; }
 
-    g.fillStyle='rgba(48,46,42,1)'; g.beginPath();
-    for(let i=0;i<sm.length;i++){ const[px,py]=sm[i]; if(i===0)g.moveTo(px,py); else g.lineTo(px,py); }
-    g.closePath(); g.fill();
+    // bbox + per-sample outward-normal vertical sign (centroid->point), reused below so the
+    // hanging crags/drips appear ONLY on the bottom/front faces (ny_out>0) and the top edge
+    // simply dissolves — an isometric island has its underbelly toward the viewer, never above.
+    let minXs=1e9,maxXs=-1e9,minYs=1e9,maxYs=-1e9;
+    for(const p of sm){ if(p[0]<minXs)minXs=p[0]; if(p[0]>maxXs)maxXs=p[0]; if(p[1]<minYs)minYs=p[1]; if(p[1]>maxYs)maxYs=p[1]; }
+    const smc_x=sm.reduce((s,p)=>s+p[0],0)/sm.length, smc_y=sm.reduce((s,p)=>s+p[1],0)/sm.length;
+    const frontArr=new Array(sm.length); const spanY=(maxYs-smc_y)||1;
+    for(let i=0;i<sm.length;i++){ const dyo=sm[i][1]-smc_y;
+      // viewer-facing weight: 0 along the top arc (melts straight into the void), ramping to 1
+      // along the lower/front arc where the isometric underbelly faces us. Smoothstep ramp (no
+      // spikes) -> a dissolving painted cliff + sparse trailing ink-drips, never protruding crags.
+      let f=dyo/spanY; f=f<=0?0:(f>=1?1:f*f*(3-2*f)); frontArr[i]=f; }
 
-    const R=Math.max(TW,TH)*z*1.05;
-    g.globalCompositeOperation='multiply'; g.globalAlpha=0.32;
-    for(let i=0;i<sm.length;i+=3){ const[px,py]=sm[i];
-      const gr=g.createRadialGradient(px,py,0,px,py,R*1.2); gr.addColorStop(0,'rgba(10,9,16,0.5)'); gr.addColorStop(1,'rgba(10,9,16,0)');
-      g.fillStyle=gr; g.beginPath(); g.arc(px,py,R*1.2,0,7); g.fill(); }
-    g.globalAlpha=1; g.globalCompositeOperation='source-over';
+    // LAYER 2 — watercolor wash body: luminous desaturated stone at the lit top, pooling to a
+    // deeper pigment base. Replaces the old flat slab so the mass reads as washed paper, not a
+    // cut-out. Stays near-grayscale (Jomon earthy, muted) per the void colour philosophy.
+    const trace=()=>{ g.beginPath(); for(let i=0;i<sm.length;i++){ const[px,py]=sm[i]; if(i===0)g.moveTo(px,py); else g.lineTo(px,py);} g.closePath(); };
+    const wash=g.createLinearGradient(0,minYs,0,maxYs);
+    wash.addColorStop(0,'rgba(72,69,63,1)'); wash.addColorStop(0.45,'rgba(56,53,48,1)');
+    wash.addColorStop(0.8,'rgba(40,38,34,1)'); wash.addColorStop(1,'rgba(30,28,26,1)');
+    trace(); g.fillStyle=wash; g.fill();
+    // pooled-pigment edge bloom: a fat dark stroke clipped inside the shape darkens only the rim
+    g.save(); trace(); g.clip();
+    g.lineWidth=Math.max(6,TW*z*0.5); g.strokeStyle='rgba(20,18,22,0.5)'; trace(); g.stroke();
+    // LAYER 2b — granulation flecks (seeded, gravity-weighted to the base) for the watercolour tell
+    g.fillStyle='rgba(24,22,26,0.5)'; const bw=maxXs-minXs, bh=maxYs-minYs, flecks=Math.min(260,Math.max(60,(bw*bh)/900|0));
+    for(let f=0;f<flecks;f++){ const u=vhash(seedBase,f*1.7+3), v=Math.pow(vhash(seedBase,f*2.9+8),0.6);
+      const fx2=minXs+u*bw, fy2=minYs+v*bh, r=(0.5+vhash(seedBase,f*3.3+5)*1.3)*z;
+      g.globalAlpha=0.10+0.22*vhash(seedBase,f*4.1+1); g.beginPath(); g.arc(fx2,fy2,r,0,7); g.fill(); }
+    g.globalAlpha=1; g.restore();
 
-    // fade-into-void underside: same torn silhouette dropped and feathered to near-nothing,
-    // so the island's lower edge dissolves into the dark rather than ending on a hard line.
+    // SOFT DISSOLVE: a short, smooth feather drops the lower/front arc into the void — no crags,
+    // no drips, no torn spikes, no dark shard-shadows. The island simply melts into darkness.
     g.beginPath(); const lo=[];
-    for(let i=0;i<sm.length;i++){ const[px,py,tnd]=sm[i];
-      const j=vhash(seedBase,i*9.1+3);
-      lo.push([px+(vhash(seedBase,i*5.3+11)*2-1)*R*0.12, py+drop*(0.45+0.85*j), tnd]);
+    for(let i=0;i<sm.length;i++){ const[px,py]=sm[i]; const ff=frontArr[i];
+      lo.push([px, py+drop*ff]);
       if(i===0)g.moveTo(px,py); else g.lineTo(px,py); }
     for(let i=lo.length-1;i>=0;i--) g.lineTo(lo[i][0],lo[i][1]);
     g.closePath();
     let minY=1e9,maxY=-1e9; for(const[,py]of sm){ if(py<minY)minY=py; if(py>maxY)maxY=py; }
-    const cg=g.createLinearGradient(0,minY,0,maxY+drop*2);
-    cg.addColorStop(0,'rgba(6,5,12,0.92)'); cg.addColorStop(0.35,'rgba(4,3,9,0.6)'); cg.addColorStop(0.7,'rgba(3,2,7,0.22)'); cg.addColorStop(1,'rgba(2,1,5,0)');
+    const cg=g.createLinearGradient(0,minY,0,maxY+drop);
+    cg.addColorStop(0,'rgba(8,7,14,0.5)'); cg.addColorStop(0.6,'rgba(5,4,10,0.2)'); cg.addColorStop(1,'rgba(3,2,7,0)');
     g.fillStyle=cg; g.fill();
 
-    // sparse hanging ink-drip stalactites, irregular spacing and thinned so they read as torn
-    // paper fibres trailing into the void rather than a regular row of teeth.
-    for(let i=0;i<sm.length;){
-      const skip=3+((vhash(seedBase,i*31+44)*5)|0); // irregular gap, never a fixed comb pitch
-      if(vhash(seedBase,i*13+4)<0.72){ i+=skip; continue; }
-      const[lx,ly,tnd]=lo[i]; const dl=drop*(0.45+1.0*vhash(seedBase,i*17+2));
-      const w0=1.1*z*(0.4+vhash(seedBase,i*23+6));
-      g.beginPath(); g.moveTo(lx-w0,ly-2*z); g.lineTo(lx+w0,ly-2*z); g.lineTo(lx+w0*0.25,ly+dl); g.closePath();
-      const dg=g.createLinearGradient(0,ly-2*z,0,ly+dl); dg.addColorStop(0,tnd?'rgba(200,216,224,0.5)':'rgba(5,4,11,0.8)'); dg.addColorStop(1,'rgba(3,2,7,0)');
-      g.fillStyle=dg; g.fill();
-      i+=skip;
-    }
-
-    // single soft ink contour along the torn edge — broken alpha so it feels brushed, not traced
-    g.lineWidth=1.3*z; g.lineCap='round'; g.beginPath();
+    // single thin, uniform sumi-e silhouette — soft and brushed, never a hard staircase outline.
+    g.lineWidth=1.1*z; g.lineCap='round';
     for(let i=0;i<sm.length;i++){ const[px,py]=sm[i];
-      g.strokeStyle='rgba(40,38,52,'+(0.30+0.22*vhash(seedBase,i*7+19))+')';
+      g.strokeStyle='rgba(34,32,44,'+(0.20+0.10*vhash(seedBase,i*7+19)).toFixed(3)+')';
       const[qx,qy]=sm[(i+1)%sm.length];
       g.beginPath(); g.moveTo(px,py); g.lineTo(qx,qy); g.stroke(); }
   }
