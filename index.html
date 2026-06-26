@@ -2118,7 +2118,7 @@ function drawRuin(g,cx,cy,z,scorch,parkRuin){ const hw=TW/2*z,hh=TH/2*z; shadowE
     for(let i=0;i<3;i++){ const a=vhash(seed,40+i)*6.283, rr=(2+vhash(seed,50+i)*2.4)*z;
       g.beginPath(); g.moveTo(cx+Math.cos(a)*rr,cy+Math.sin(a)*rr*0.5); g.lineTo(cx+Math.cos(a)*(rr+3*z),cy+Math.sin(a)*(rr+3*z)*0.5-2.5*z); g.stroke(); }
     return; }
-  if(scorch){                                                                              // arson aftermath reads distinctly from quake/kaiju rubble — burnt, not just broken
+  if(scorch){                                                                              // arson aftermath reads distinctly from plain ruin — burnt, not just broken
     g.save(); g.fillStyle='rgba(20,16,14,0.5)'; g.beginPath();g.ellipse(cx,cy+hh*0.25,hw*0.95,hh*0.5,0,0,7);g.fill(); g.restore();   // ash halo on the ground, wider than the frame
     g.fillStyle='#241c18'; g.beginPath();g.moveTo(cx-hw*0.5,cy);g.lineTo(cx,cy+hh*0.5);g.lineTo(cx,cy-9*z);g.lineTo(cx-hw*0.5,cy-13*z);g.closePath();g.fill();
     g.fillStyle='#1a1411'; g.beginPath();g.moveTo(cx,cy+hh*0.5);g.lineTo(cx+hw*0.4,cy+hh*0.2);g.lineTo(cx+hw*0.4,cy-7*z);g.lineTo(cx,cy-9*z);g.closePath();g.fill();
@@ -3126,7 +3126,6 @@ function render(){ ctx.setTransform(DPR,0,0,DPR,0,0);
   for(const u of residents){ if(u.claimed)continue; acts.push({tx:u.x,ty:u.y,k:'a',a:u,d:u.x+u.y}); }
   for(const h of farmHands) acts.push({tx:h.x,ty:h.y,k:'a',a:h,d:h.x+h.y});
   for(const e of encounters)for(const m of e.mob) if(m.state!=='down') acts.push({tx:m.x,ty:m.y,k:'a',a:m,d:m.x+m.y});
-  if(kaiju&&kaiju.militia) for(const m of kaiju.militia) if(m.state!=='down') acts.push({tx:m.x,ty:m.y,k:'a',a:m,d:m.x+m.y});
   for(const p of decay) if(p.kind==='prop') acts.push({tx:p.x,ty:p.y,k:'a',a:p,d:p.x+p.y});   // seated beggars / musicians / fortune-tellers
   acts.sort((p,q)=>p.d-q.d||p.tx-q.tx);
   octx.setTransform(DPR,0,0,DPR,0,0); octx.clearRect(0,0,VW,VH);
@@ -3160,7 +3159,6 @@ function render(){ ctx.setTransform(DPR,0,0,DPR,0,0);
   for(const a of apparitions){ if(a.ground)continue; const[cx,cy]=s2(a.x,a.y);
     ctx.globalAlpha=Math.max(0,Math.min(1,Math.min(a_in(a),a_out(a))))*0.9; (APP[a.kind]||APP.hitodama)(ctx,cx,cy-30*z,z,fx); ctx.globalAlpha=1; }
   drawViolenceFX(ctx,z);
-  if(kaiju){ const[kcx,kcy]=s2(kaiju.x,kaiju.y); drawKaijuSilhouette(ctx,kcx,kcy,z,kaiju,fx*0.001); }
   // 5) global grade + paper grain + vignette + weather (dynamic, full-frame)
   { const _P=agePal(); if(_P.wet>=0.8 && !_P.neon && !VOID) paintAtmosphereEarly(ctx); }
   // per-age grade mood — now applied in VOID too (gentle), so the emotional arc (warm Heian ->
@@ -3912,208 +3910,6 @@ function scatterWitnessesWide(vx,vy){
     if(d<5){ r.flee=Math.max(r.flee||0,2.0); r.watch=undefined; }
     else if(d<9&&!(r.flee>0)){ r.watch=Math.max(r.watch||0,3.5+Math.random()*2); }
   } }
-
-/* ============================================================
-   KAIJU RAMPAGE — natural-disaster (earthquake/tornado/meteor) system removed entirely
-   per design direction; kaiju rampages remain as the sole non-raid destructive event.
-   Reuses the existing fire (c.burn/disasterT), debris/scar/stain pools, corpse pipeline,
-   and the encounters-style approach→rampage→depart state machine already proven by raids.
-   Mitigation (not occurrence) is the only paid lever — keeps rules minimal: there is no
-   new toolbar button, no new resource, no insurance meta-mechanic.
-   ============================================================ */
-let kaiju=null;                // active kaiju object, or null
-let disasterCooldown=70+Math.random()*40;   // seconds; flat floor between kaiju rampages
-let _lastWardToastAt=-999;                   // debounce: one "wards hold" flavor line per ~6s, not per-tile-per-tick
-const DISASTER_BASE_RISK=0.05;              // flat per-roll risk weight — NOT scaled by era
-
-function totalDevTiles(){ let n=0; for(let y=0;y<H;y++)for(let x=0;x<W;x++)if(grid[y][x].dev>0||grid[y][x].civ)n++; return n; }
-
-function maybeRollDisaster(dt){
-  if(disasterCooldown>0){ disasterCooldown-=dt; return; }
-  if(kaiju) return;                       // one at a time
-  const dev=totalDevTiles(), tiles=W*H;
-  const risk=DISASTER_BASE_RISK*(0.25+Math.min(1,dev/Math.max(1,tiles*0.18)));
-  if(Math.random()<risk*dt){
-    disasterCooldown=90+Math.random()*60;            // 90s+ floor regardless of what rolled
-    spawnKaiju();
-  }
-}
-
-/* ---- damage appliers: express destruction purely through existing dev/zone/own/ruin/burn fields,
-   exactly like applyRaid() does — no parallel "tile health" system. ---- */
-function wardHoldToast(kind){
-  const now=(typeof performance!=='undefined')?performance.now():0;
-  if(now-_lastWardToastAt<6000)return; _lastWardToastAt=now;
-  const what='giant';
-  toast('⛩ Wards hold',"the shrine's blessing turns the "+what+' aside');
-}
-
-function playKaijuRoar(pitch){ const ctx=sfxCtx&&sfxCtx(); if(!ctx)return; const dest=sfxDest(ctx), t0=ctx.currentTime;
-  [1,1.5,2.01].forEach((p,i)=>{ const o=ctx.createOscillator(),g=ctx.createGain();
-    o.type=i===0?'sawtooth':'sine'; o.frequency.setValueAtTime((pitch||60)*p,t0); o.frequency.exponentialRampToValueAtTime((pitch||60)*p*0.7,t0+1.0);
-    g.gain.setValueAtTime(0.0001,t0); g.gain.exponentialRampToValueAtTime(0.4/(i+1),t0+0.08); g.gain.exponentialRampToValueAtTime(0.0001,t0+1.3);
-    o.connect(g).connect(dest); o.start(t0); o.stop(t0+1.4); }); }
-function playKaijuFootstep(){ const ctx=sfxCtx&&sfxCtx(); if(!ctx)return; const dest=sfxDest(ctx), t0=ctx.currentTime;
-  const o=ctx.createOscillator(),g=ctx.createGain(); o.type='sine'; o.frequency.setValueAtTime(70,t0); o.frequency.exponentialRampToValueAtTime(32,t0+0.3);
-  g.gain.setValueAtTime(0.5,t0); g.gain.exponentialRampToValueAtTime(0.0001,t0+0.35);
-  o.connect(g).connect(dest); o.start(t0); o.stop(t0+0.4); }
-
-/* ============================================================
-   KAIJU RAMPAGE — Gashadokuro / Yamata no Orochi / Shuten-dōji.
-   Pure sumi-e oversized silhouette + one small identity accent colour per spec (never a full
-   colour fill — glow/bloom stays reserved for Quantum Edo per Master Spec §9). Drawn directly
-   in screen space in render(), NOT pushed through the per-tile diamond agent pipeline, since
-   it is many tiles tall and must occlude/overlay the whole scene near its footprint.
-   Mitigation is FREE and automatic (nearby guarded/civic-dense wards spawn militia on their own)
-   to honour "keep rules minimal" — no new currency sink, no new button. ============================ */
-const KAIJU_KIND=['gashadokuro','orochi','shuten'];
-const KAIJU_INFO={
-  gashadokuro:{ name:'Gashadokuro', accent:'#5ad0e8' },                 // dim hitodama-blue eye glow
-  orochi:     { name:'Yamata no Orochi', accent:'#c84a3a' },            // ember-red (alternates w/ temple green per head)
-  shuten:     { name:'Shuten-dōji', accent:'#7a1f1f' },                  // oxblood armor trim
-};
-function spawnKaiju(){
-  const kind=KAIJU_KIND[(Math.random()*KAIJU_KIND.length)|0];
-  const ci=cityInfo(); const side=(Math.random()*4)|0;     // 0=N 1=E 2=S 3=W edge spawn
-  let x,y; if(side===0){x=(Math.random()*W)|0;y=-3;} else if(side===1){x=W+3;y=(Math.random()*H)|0;}
-  else if(side===2){x=(Math.random()*W)|0;y=H+3;} else {x=-3;y=(Math.random()*H)|0;}
-  const tx=ci?ci.cx:(W/2), ty=ci?ci.cy:(H/2);
-  kaiju={ kind, name:KAIJU_INFO[kind].name, x, y, tx, ty, t:0, state:'approach', st:0,
-    hp:kind==='orochi'?14:10, maxHp:kind==='orochi'?14:10, dir:1, stepPh:0, lastFoot:0, heads:kind==='orochi'?3:1, departDir:[Math.random()<0.5?-1:1,Math.random()<0.5?-1:1] };
-  toast('⚠️ '+KAIJU_INFO[kind].name,'rises at the edge of the island');
-  playKaijuRoar(kind==='shuten'?42:kind==='orochi'?75:55);
-  autoSummonDefenders();
-}
-/* free, automatic militia response — reuses spawnDefenders() exactly as the raid system does.
-   No cost, no menu: keeps the rules-minimal mandate while still giving the rampage visible
-   pushback instead of the island just sitting there and taking it. */
-function autoSummonDefenders(){
-  if(!kaiju)return; const ci=cityInfo(); if(!ci)return;
-  const n=2+((Math.random()*3)|0);
-  kaiju.militia=spawnDefenders(ci.cx,ci.cy,n); armDefenders(kaiju.militia);
-  if(typeof toast==='function')toast('🛡 Militia musters','townsfolk take up arms against the giant');
-}
-function updateKaiju(dt){
-  if(!kaiju)return; const k=kaiju; k.t+=dt; k.stepPh+=dt;
-  switch(k.state){
-    case 'approach': {
-      const dx=k.tx-k.x, dy=k.ty-k.y, d=Math.hypot(dx,dy)||1;
-      const spd=k.kind==='shuten'?0.85:k.kind==='orochi'?1.0:0.7;
-      k.x+=dx/d*spd*dt; k.y+=dy/d*spd*dt; k.dir=dx<0?-1:1;
-      if(k.stepPh-k.lastFoot>0.7){ k.lastFoot=k.stepPh; footstepImpact(k); }
-      if(d<4){ k.state='rampage'; k.st=0; toast('💥 '+k.name+' rampages','the island shakes underfoot'); }
-      break; }
-    case 'rampage': {
-      k.st+=dt;
-      if(k.stepPh-k.lastFoot>0.55){ k.lastFoot=k.stepPh; footstepImpact(k); }
-      // drift toward the densest remaining cluster so the rampage keeps mattering instead of idling —
-      // but step away from hallowed ground first if the chosen drift point lands inside a ward
-      const ci=cityInfo(); if(ci&&Math.random()<dt*0.6){
-        let ntx=ci.cx+(Math.random()-0.5)*4, nty=ci.cy+(Math.random()-0.5)*4;
-        const rtx=Math.round(ntx), rty=Math.round(nty);
-        if(shrineGrid&&inB(rtx,rty)&&shrineGrid[rty][rtx]){ ntx=ci.cx-(ntx-ci.cx); nty=ci.cy-(nty-ci.cy); }
-        k.tx=ntx; k.ty=nty;
-      }
-      const dx=k.tx-k.x, dy=k.ty-k.y, d=Math.hypot(dx,dy)||1;
-      if(d>1.2){ k.x+=dx/d*0.45*dt; k.y+=dy/d*0.45*dt; k.dir=dx<0?-1:1; }
-      if(Math.random()<dt*1.4) kaijuSpecialMove(k);
-      // free militia gradually wears it down; combat purely cosmetic/HP, never a hard requirement
-      if(k.militia){ for(const m of k.militia) if(m.state==='idle'&&Math.random()<dt*0.5){ k.hp-=0.4; if(Math.random()<0.3) addClashSpark(k.x+(Math.random()-0.5)*1.5,k.y+(Math.random()-0.5)*1.5); } }
-      if(k.st>50 || k.hp<=0){ k.state='depart'; k.st=0; toast(k.hp<=0?'🛡 '+k.name+' driven off':'🌫 '+k.name+' recedes','the giant withdraws toward the void'); }
-      break; }
-    case 'depart': {
-      k.x+=k.departDir[0]*0.9*dt; k.y+=k.departDir[1]*0.9*dt;   // steady retreat off-island toward the void
-      if(k.x<-6||k.x>W+6||k.y<-6||k.y>H+6||k.st>14) kaiju=null;
-      k.st+=dt;
-      break; }
-  }
-}
-/* a footstep landing: scar + debris burst at the kaiju's CURRENT tile, exactly like collapse FX */
-function footstepImpact(k){
-  const tx=Math.round(k.x), ty=Math.round(k.y); if(!inB(tx,ty))return;
-  addScar(tx,ty,0.45,2); addDebris(tx,ty,4+((Math.random()*4)|0),false);
-  playKaijuFootstep();
-  damageTileUnderKaiju(tx,ty);
-}
-function damageTileUnderKaiju(tx,ty){
-  for(let j=-1;j<=1;j++)for(let i=-1;i<=1;i++){ const nx=tx+i,ny=ty+j; if(!inB(nx,ny))continue;
-    const c=grid[ny][nx]; if(!(c.dev>0||c.civ))continue;
-    if(shrineGrid&&shrineGrid[ny][nx]){ wardHoldToast('kaiju'); continue; }
-    if(Math.random()<0.4){
-      if(c.dev>0){ c.dev=Math.max(0,c.dev-1); if(c.dev<=0){ if(c.own===CLIENT)toast('🦴 Crushed underfoot','a holding falls beneath the giant'); c.zone=0;c.own=0;c.ruin=1; } }
-      else if(c.civ&&c.civ!==TOWN&&Math.random()<0.25){ if(c.civ===PARK||c.civ===FARM)c.parkRuin=1; c.civ=0; c.ruin=1; }
-    } }
-}
-/* signature moves — cosmetic + a denser destruction tick, scaled to spec identity per kaiju */
-function kaijuSpecialMove(k){
-  if(k.kind==='gashadokuro'){                                    // Bone Crush — single heavy stomp, 3-tile radius
-    const tx=Math.round(k.x),ty=Math.round(k.y);
-    for(let j=-3;j<=3;j++)for(let i=-3;i<=3;i++){ if(Math.hypot(i,j)>3)continue; const nx=tx+i,ny=ty+j; if(!inB(nx,ny))continue;
-      if(shrineGrid&&shrineGrid[ny][nx]){ wardHoldToast('kaiju'); continue; }
-      const c=grid[ny][nx]; if((c.dev>0||c.civ)&&Math.random()<0.22){ if(c.dev>0)c.dev=0,c.zone=0,c.own=0,c.ruin=1; else if(c.civ!==TOWN){ if(c.civ===PARK||c.civ===FARM)c.parkRuin=1; c.civ=0,c.ruin=1; } } }
-    addScar(tx,ty,0.55,3); addDebris(tx,ty,14,false);
-  } else if(k.kind==='orochi'){                                   // multi-head sweep — 3 independent strike points
-    for(let h=0;h<k.heads;h++){ const ox=k.x+(Math.random()-0.5)*3, oy=k.y+(Math.random()-0.5)*3;
-      const tx=Math.round(ox),ty=Math.round(oy); if(!inB(tx,ty))continue;
-      damageTileUnderKaiju(tx,ty); addDebris(tx,ty,6,false); addScar(tx,ty,0.35,1); }
-  } else if(k.kind==='shuten'){                                   // single devastating arc-swing — clears a line
-    const tx=Math.round(k.x),ty=Math.round(k.y), ang=Math.random()*6.283;
-    for(let s=0;s<4;s++){ const nx=Math.round(tx+Math.cos(ang)*s), ny=Math.round(ty+Math.sin(ang)*s); if(!inB(nx,ny))continue;
-      damageTileUnderKaiju(nx,ny); addDebris(nx,ny,5,false); }
-    addScar(tx,ty,0.5,2);
-    if(window.SoruBattleSFX) window.SoruBattleSFX.clashCluster(3,{gain:1.2});
-  }
-}
-
-/* ---------- rendering: oversized sumi-e silhouette in screen space, drawn in render()'s
-   FX pass (after the unified agent pass, alongside fire/apparitions, before grade+grain) ---------- */
-function drawKaijuSilhouette(g,cx,cy,z,k,t){
-  const scale=z*(k.kind==='orochi'?2.6:k.kind==='shuten'?3.0:3.4);
-  const bob=Math.sin(k.stepPh*3)*2*z;
-  g.save(); g.translate(cx,cy+bob);
-  const accent=KAIJU_INFO[k.kind].accent;
-  // soft ground contact shadow first, so the silhouette reads as standing ON the island
-  g.globalAlpha=0.35; g.fillStyle='#000'; g.beginPath(); g.ellipse(0,4*z,16*scale*0.18,5*scale*0.1,0,0,7); g.fill(); g.globalAlpha=1;
-  if(k.kind==='gashadokuro'){
-    g.fillStyle='#0c0c0e';
-    // ribcage/torso — exaggerated bone-stack silhouette built from stacked ink shapes
-    g.beginPath(); g.moveTo(-6*scale,2*scale); g.lineTo(-7*scale,-10*scale); g.lineTo(-3*scale,-16*scale);
-    g.lineTo(3*scale,-16*scale); g.lineTo(7*scale,-10*scale); g.lineTo(6*scale,2*scale);
-    g.lineTo(3*scale,4*scale); g.lineTo(-3*scale,4*scale); g.closePath(); g.fill();
-    for(let r=0;r<4;r++){ g.globalAlpha=0.85; g.fillStyle='#0c0c0e'; g.beginPath();
-      g.ellipse(0,-11*scale+r*3.2*scale,5.4*scale-r*0.4*scale,1*scale,0,0,7); g.fill(); } g.globalAlpha=1;
-    g.fillStyle='#0c0c0e'; g.beginPath(); g.arc(0,-19*scale,4.6*scale,0,7); g.fill();          // skull
-    g.fillStyle='#000'; g.beginPath(); g.ellipse(0,-17.5*scale,2.6*scale,1.6*scale,0,0,7); g.fill(); // jaw gap
-    g.fillStyle=accent; g.globalAlpha=0.8;                                                    // dim hitodama-blue eyes
-    g.beginPath(); g.arc(-1.6*scale,-19.5*scale,0.55*scale,0,7); g.arc(1.6*scale,-19.5*scale,0.55*scale,0,7); g.fill(); g.globalAlpha=1;
-    g.strokeStyle='#0c0c0e'; g.lineWidth=1.2*scale;                                            // tattered robe fragments, dry-brush
-    for(let i=0;i<5;i++){ const a=-0.6+i*0.3; g.beginPath(); g.moveTo(a*5*scale,3*scale); g.lineTo(a*6*scale,9*scale+Math.sin(k.t*2+i)*scale); g.stroke(); }
-  } else if(k.kind==='orochi'){
-    g.strokeStyle='#0c0c0e'; g.lineWidth=2.6*scale; g.lineCap='round';
-    g.beginPath(); g.moveTo(0,4*scale);
-    for(let i=1;i<=14;i++){ const a=k.t*1.5+i*0.4, xx=Math.sin(a)*4*scale, yy=4*scale-i*1.6*scale; g.lineTo(xx,yy); }
-    g.stroke();
-    const headCols=['#c84a3a','#3a6e4a','#c84a3a'];
-    for(let h=0;h<k.heads;h++){ const a=k.t*1.5+(14+h)*0.4-h*1.1, hx=Math.sin(a)*4*scale, hy=4*scale-(14+h*2)*1.6*scale;
-      g.fillStyle='#0c0c0e'; g.beginPath(); g.ellipse(hx,hy,2.6*scale,3.4*scale,0,0,7); g.fill();
-      g.fillStyle=headCols[h%headCols.length]; g.globalAlpha=0.75; g.beginPath(); g.arc(hx-0.8*scale,hy-0.6*scale,0.4*scale,0,7); g.arc(hx+0.8*scale,hy-0.6*scale,0.4*scale,0,7); g.fill(); g.globalAlpha=1; }
-  } else if(k.kind==='shuten'){
-    g.fillStyle='#0c0c0e';
-    g.beginPath(); g.moveTo(-7*scale,4*scale); g.lineTo(-8*scale,-9*scale); g.lineTo(-4*scale,-15*scale);
-    g.lineTo(4*scale,-15*scale); g.lineTo(8*scale,-9*scale); g.lineTo(7*scale,4*scale); g.closePath(); g.fill();   // armored bulk
-    g.fillStyle='#0c0c0e'; g.beginPath(); g.arc(0,-18*scale,4.2*scale,0,7); g.fill();                              // oni head
-    g.fillStyle='#0c0c0e'; g.beginPath();                                                                          // horns
-    g.moveTo(-2.6*scale,-21*scale); g.lineTo(-3.6*scale,-26*scale); g.lineTo(-1.4*scale,-22*scale); g.closePath(); g.fill();
-    g.beginPath(); g.moveTo(2.6*scale,-21*scale); g.lineTo(3.6*scale,-26*scale); g.lineTo(1.4*scale,-22*scale); g.closePath(); g.fill();
-    g.fillStyle=accent; g.globalAlpha=0.9;                                                                         // oxblood armor trim
-    g.fillRect(-7*scale,1*scale,14*scale,1.4*scale); g.globalAlpha=1;
-    g.fillStyle='#fff'; g.beginPath(); g.arc(-1.5*scale,-18.5*scale,0.5*scale,0,7); g.arc(1.5*scale,-18.5*scale,0.5*scale,0,7); g.fill(); // eyes
-    const swingA=Math.sin(k.t*1.4)*0.7;                                                                            // oversized blade silhouette
-    g.save(); g.rotate(swingA); g.fillStyle='#0c0c0e'; g.beginPath();
-    g.moveTo(7*scale,-6*scale); g.lineTo(20*scale,-10*scale); g.lineTo(19*scale,-7*scale); g.lineTo(8*scale,-3*scale); g.closePath(); g.fill(); g.restore();
-  }
-  g.restore();
-}
 
 function makeParts(x,y,skin,col){ const parts=[], kinds=['head','arm','arm','leg'];   // flung out, then settle
   for(const k of kinds){ const a=Math.random()*6, sp=0.5+Math.random()*0.9;
@@ -4973,7 +4769,6 @@ function loop(t){ const dt=lastT?Math.min(0.05,(t-lastT)/1000):0; lastT=t; fx=t;
     if(window.SoruAmbientZoom) window.SoruAmbientZoom.update(dt);
     tickAcc+=dt; if(tickAcc>=1.5){tickAcc=0;tick();}
     fireAcc+=dt; if(fireAcc>=40){fireAcc=0; if(S.pop>90&&Math.random()<0.18)igniteRandom();}
-    maybeRollDisaster(dt); updateKaiju(dt);
     render();
   }catch(err){ if(window.__err)window.__err('loop: '+(err.message||err)); }
   requestAnimationFrame(loop); }
@@ -6512,8 +6307,7 @@ const MANIFEST_PROFILE={
   yukionna:   {type:'cry',    intensity:0.6},
   kasaobake:  {type:'chime',  intensity:0.4},
   bakeneko:   {type:'whisper',intensity:0.55},
-  nurarihyon: {type:'ambient',intensity:0.5},
-  gashadokuro:{type:'hostile',intensity:1.0,big:true}
+  nurarihyon: {type:'ambient',intensity:0.5}
 };
 function sfxManifestScaled(kind,mult){
   const p=MANIFEST_PROFILE[kind]||{type:'ambient',intensity:0.5};
@@ -6579,7 +6373,7 @@ function ykOnInteraction(kind,benevolent){
   if(now-last<900) return;
   YK_STATE.lastInteractionByKind[kind]=now;
   const scale=ykEraScale();
-  const malKinds={oni:1,gashadokuro:1};
+  const malKinds={oni:1};
   sfxInteraction({intensity:(malKinds[kind]?scale.hostile:scale.ethereal)*0.9, benevolent: benevolent!==false && !malKinds[kind]});
 }
 
