@@ -337,9 +337,16 @@ let DPR=Math.min(2,window.devicePixelRatio||1);
 let VW=document.documentElement.clientWidth||window.innerWidth||360;
 let VH=document.documentElement.clientHeight||window.innerHeight||640;
 const cam={x:0,y:0,zoom:0.9}; const ZMIN=0.4,ZMAX=2.6;
-function resize(){ const r=cv.getBoundingClientRect();
-  let w=Math.round(r.width)||document.documentElement.clientWidth||window.innerWidth||360;
-  let h=Math.round(r.height)||document.documentElement.clientHeight||window.innerHeight||640;
+function resize(){
+  // cv.clientWidth/clientHeight reflect the canvas's own LOCAL layout box (pre-transform),
+  // which is what the backing-store resolution must match. getBoundingClientRect() instead
+  // reports the POST-transform on-screen box — on the rotated mobile portrait layout
+  // (#gameRoot.forceLandscape) that box has width/height swapped vs. the local box, so using
+  // it here sized the canvas backing store with width/height swapped, and the browser then
+  // had to non-uniformly stretch that buffer to fit the actual (un-swapped) CSS box, squishing
+  // everything drawn on it. clientWidth/clientHeight are unaffected by CSS transforms.
+  let w=Math.round(cv.clientWidth)||document.documentElement.clientWidth||window.innerWidth||360;
+  let h=Math.round(cv.clientHeight)||document.documentElement.clientHeight||window.innerHeight||640;
   VW=w; VH=h;
   DPR=Math.min(w<760?1.5:2, window.devicePixelRatio||1);
   cv.width=Math.max(1,Math.floor(w*DPR)); cv.height=Math.max(1,Math.floor(h*DPR)); }
@@ -5115,7 +5122,9 @@ let lastT=0, tickAcc=0, fireAcc=0, bootFitT=0, lastVPH=-1;
 function loop(t){ const dt=lastT?Math.min(0.05,(t-lastT)/1000):0; lastT=t; fx=t;
   try{
     // During the first ~2s, re-fit whenever the viewport height changes (mobile URL-bar collapse, late layout)
-    if(bootFitT<2.2){ bootFitT+=dt; const h=Math.round(cv.getBoundingClientRect().height)||0; if(h>0&&h!==lastVPH){ lastVPH=h; resize(); fit(); } }
+    // Uses clientHeight (the canvas's own local box) to match resize(), not getBoundingClientRect()
+    // (post-transform screen box), which would compare the wrong value on rotated mobile portrait layouts.
+    if(bootFitT<2.2){ bootFitT+=dt; const h=Math.round(cv.clientHeight)||0; if(h>0&&h!==lastVPH){ lastVPH=h; resize(); fit(); } }
     updateEnv(dt); updateTraffic(dt); updateResidents(dt); updateFarms(dt); updateApparitions(dt); updateEncounters(dt); updateCorpses(dt); updateGore(dt); updateDecay(dt);
     if(window.SoruGibberish) window.SoruGibberish.update(dt);
     if(window.SoruAmbientZoom) window.SoruAmbientZoom.update(dt);
