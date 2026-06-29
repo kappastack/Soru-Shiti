@@ -1061,6 +1061,17 @@ function waterNeighbors(tx,ty){
         wE=inB(tx+1,ty)&&grid[ty][tx+1].ter===WATER, wWst=inB(tx-1,ty)&&grid[ty][tx-1].ter===WATER;
   return {wN,wS,wE,wWst,deg:(wN?1:0)+(wS?1:0)+(wE?1:0)+(wWst?1:0)};
 }
+// The painted spirit-water silhouette bulges ~1 tile past the actual water tiles (diamond overdraw
+// + bank blur + smooth shoreline curve), so a tree merely diagonally adjacent to water — or one
+// orthogonal-step-and-a-half away — sits visually IN the water. Exclude trees anywhere inside that
+// bulge: the full 8-neighbourhood plus the two-step orthogonal ring.
+function nearSpiritWater(tx,ty){
+  for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){ if(!dx&&!dy)continue;
+    const ax=tx+dx,ay=ty+dy; if(inB(ax,ay)&&grid[ay][ax].ter===WATER)return true; }
+  if((inB(tx+2,ty)&&grid[ty][tx+2].ter===WATER)||(inB(tx-2,ty)&&grid[ty][tx-2].ter===WATER)||
+     (inB(tx,ty+2)&&grid[ty+2][tx].ter===WATER)||(inB(tx,ty-2)&&grid[ty-2][tx].ter===WATER))return true;
+  return false;
+}
 /* SPIRIT-WATER BODY — replaces the old per-tile renderer. The old approach drew every
    water tile as its own diamond (fill + gradient + stroke), and even with seam-matched
    gradients the SHAPE itself was still N separate diamonds — at any zoom level the lake
@@ -1071,7 +1082,7 @@ function waterNeighbors(tx,ty){
    all, then fill that single shape with the painterly wash. Frozen terminus tiles keep
    their own crystalline per-tile look (drawFrozenWater) since ice is a different material
    and is SUPPOSED to read faceted. */
-let _swMaskC=null,_swMaskX=null,_swBlurC=null,_swBlurX=null,_swLayerC=null,_swLayerX=null,_swDepthC=null,_swDepthX=null,_swTinyC=null,_swTinyX=null,_swDeepC=null,_swDeepX=null;
+let _swMaskC=null,_swMaskX=null,_swBlurC=null,_swBlurX=null,_swLayerC=null,_swLayerX=null,_swDepthC=null,_swDepthX=null,_swTinyC=null,_swTinyX=null,_swDeepC=null,_swDeepX=null,_swCovC=null,_swCovX=null;
 function ensureSpiritMaskBuffers(w,h){
   if(_swMaskC&&_swMaskC.width===w&&_swMaskC.height===h)return;
   _swMaskC=document.createElement('canvas'); _swMaskC.width=w; _swMaskC.height=h; _swMaskX=_swMaskC.getContext('2d');
@@ -1080,6 +1091,15 @@ function ensureSpiritMaskBuffers(w,h){
 }
 function _rgbOf(hex){ const n=parseInt(hex.slice(1),16); return [(n>>16)&255,(n>>8)&255,n&255]; }
 function _ss(e0,e1,x){ if(x<=e0)return 0; if(x>=e1)return 1; const t=(x-e0)/(e1-e0); return t*t*(3-2*t); }
+function _ihash01(a,b){ let n=(a*374761393+b*668265263)|0; n=Math.imul(n^(n>>>13),1274126177); return ((n^(n>>>16))>>>0)/4294967296; }
+// smooth value noise (bilinear-interpolated integer hash) — no trig, world-seeded; used to waver
+// the water's lapping lines so they read as brushed sumi-e strokes rather than mechanical contours.
+function _vnoise(x,y){
+  const xi=Math.floor(x), yi=Math.floor(y), xf=x-xi, yf=y-yi;
+  const u=xf*xf*(3-2*xf), v=yf*yf*(3-2*yf);
+  const n00=_ihash01(xi,yi), n10=_ihash01(xi+1,yi), n01=_ihash01(xi,yi+1), n11=_ihash01(xi+1,yi+1);
+  return (n00*(1-u)+n10*u)*(1-v)+(n01*(1-u)+n11*u)*v;
+}
 function drawSpiritWaterBody(g,z,t){
   // 1) collect every spirit OR frozen water tile currently on/near screen, in screen space.
   // NOTE: carveSpiritWater explicitly sets spirit=0 when it sets frozen=1 (the terminus
@@ -1092,16 +1112,24 @@ function drawSpiritWaterBody(g,z,t){
   // blit scales. It used to be computed in live screen pixels, so the lake/river visibly changed
   // character as you zoomed in and out.
   const hw=TW/2, hh=TH/2;
+  // COLLECT EVERY spirit/frozen tile, never culled by screen position. The body is small (one
+  // lake + one river) so this is cheap, and it is essential for stability: the painterly depth,
+  // foam and ripple field below is normalised over the body's OWN bounding box. If tiles were
+  // dropped as they left the viewport the box would shrink, the "deep centre" and ripple rings
+  // would recompute, and the water would visibly change character on pan/zoom (the reported bug).
+  // Always-all keeps the body identical at every camera position; only the final blit moves.
+  let sMinX=1e9,sMinY=1e9,sMaxX=-1e9,sMaxY=-1e9;
   for(let ty=0;ty<H;ty++)for(let tx=0;tx<W;tx++){ const c=grid[ty][tx];
     if(c.ter!==WATER||!(c.spirit||c.frozen))continue;
-    const[scx,scy]=s2(tx,ty);
-    if(scx<-TW*z*3||scx>VW+TW*z*3||scy<-TH*z*14||scy>VH+TH*z*6)continue;   // cull against the real screen
     const cx=(tx-ty)*(TW/2), cy=(tx+ty)*(TH/2);                            // z=1 body-space position
     cells.push([cx,cy,tx,ty,!!c.frozen]);
     if(cx-hw<minX)minX=cx-hw; if(cx+hw>maxX)maxX=cx+hw;
     if(cy-hh<minY)minY=cy-hh; if(cy+hh>maxY)maxY=cy+hh;
+    const[scx,scy]=s2(tx,ty);                                             // screen bbox, for off-screen early-out only
+    if(scx<sMinX)sMinX=scx; if(scx>sMaxX)sMaxX=scx; if(scy<sMinY)sMinY=scy; if(scy>sMaxY)sMaxY=scy;
   }
   if(!cells.length)return;
+  if(sMaxX<-TW*z*3||sMinX>VW+TW*z*3||sMaxY<-TH*z*14||sMinY>VH+TH*z*6)return;   // whole body off-screen — skip (does NOT alter the painted field)
   const pad=Math.max(hw,hh)*7;
   minX-=pad; minY-=pad; maxX+=pad; maxY+=pad;
   const bw=Math.max(1,Math.min(2200,Math.ceil(maxX-minX))), bh=Math.max(1,Math.min(2200,Math.ceil(maxY-minY)));
@@ -1120,7 +1148,7 @@ function drawSpiritWaterBody(g,z,t){
   // physically overlap a lot to read as one smooth tube rather than a sawtooth of facets.
   // The lake (many adjacent wet tiles) tolerates the same factor fine, it just stays a wide
   // continuous blob either way.
-  const OVR=1.85;
+  const OVR=2.05;
   for(const[cx,cy]of cells){
     const ox=cx-minX, oy=cy-minY;
     _swMaskX.beginPath();
@@ -1143,7 +1171,7 @@ function drawSpiritWaterBody(g,z,t){
   // blur radius must be comparable to the zigzag amplitude itself (~hw) to actually erase it,
   // not a small fraction of it — express directly as "blur this many source px" rather than
   // an inverse shrink-factor formula, which is far more predictable to tune.
-  const blurPx=Math.max(6, hw*0.85);
+  const blurPx=Math.max(5, hw*0.74);   // enough to fuse the diamond tile stamps into one smooth bank (no bead scallops); contrast+ring tuning below supplies the crisp Bad-North read
   const shrink=Math.max(0.03,Math.min(0.5, 1/blurPx));
   const sbw=Math.max(1,Math.round(bw*shrink)), sbh=Math.max(1,Math.round(bh*shrink));
   if(_swBlurC.width!==sbw||_swBlurC.height!==sbh){ _swBlurC.width=sbw; _swBlurC.height=sbh; }
@@ -1152,8 +1180,15 @@ function drawSpiritWaterBody(g,z,t){
   _swBlurX.drawImage(_swMaskC,0,0,bw,bh,0,0,sbw,sbh);   // downscale — averages neighbouring tile edges together
   _swMaskX.clearRect(0,0,bw,bh); _swMaskX.imageSmoothingEnabled=true; _swMaskX.imageSmoothingQuality='high';
   _swMaskX.drawImage(_swBlurC,0,0,sbw,sbh,0,0,bw,bh);   // upscale back — bilinear interpolation reads as a soft blur
-  // restamp once more at full alpha to lift the now-soft interior back toward solid white,
-  // leaving only the genuinely soft band right at the coastline
+  // The mask is now a SMOOTH-shaped soft blob (beads fused away). But a wide feather scales up
+  // with zoom and reads as fog. So SHARPEN the edge to a tight band while keeping the smooth
+  // shape: compositing the soft mask onto itself maps alpha a -> a(2-a), steepening the
+  // shoreline falloff each pass without reintroducing tile corners. Two passes give a defined
+  // Bad-North coastline that stays crisp at every zoom; the painted foam/ink lines below then
+  // supply the watercolor bank. (iOS-safe — plain drawImage, no ctx.filter.)
+  _swMaskX.globalCompositeOperation='source-over';
+  _swMaskX.drawImage(_swMaskC,0,0);
+  _swMaskX.drawImage(_swMaskC,0,0);
   _swMaskX.drawImage(_swMaskC,0,0);
 
 
@@ -1168,62 +1203,128 @@ function drawSpiritWaterBody(g,z,t){
   _swLayerX.setTransform(1,0,0,1,0,0); _swLayerX.clearRect(0,0,bw,bh);
   _swLayerX.globalCompositeOperation='source-over';
   const Pw=(VOID?AGEPAL[0]:agePal()).water;
-  const C_DEEP=_rgbOf(shade(Pw,-50)), C_MID=_rgbOf(shade(Pw,-14)),
-        C_SH=_rgbOf(mix(Pw,'#6fa193',0.46)), C_FOAM=_rgbOf(mix(Pw,'#d6ece2',0.74));
+  const C_DEEP=_rgbOf(shade(Pw,-54)), C_MID=_rgbOf(shade(Pw,-14)),
+        C_SH=_rgbOf(mix(Pw,'#9ad6c4',0.56)), C_FOAM=_rgbOf(mix(Pw,'#eafaf2',0.85));
   if(sbw>1&&sbh>1){
     if(!_swDepthC){ _swDepthC=document.createElement('canvas'); _swDepthX=_swDepthC.getContext('2d'); }
-    if(_swDepthC.width!==sbw||_swDepthC.height!==sbh){ _swDepthC.width=sbw; _swDepthC.height=sbh; }
-    // CRISP COVERAGE FIELD — moderate blur, alpha saturates fast inside the bank. Drives the
-    // tight foam line and wet-ink contour right at the true shoreline.
-    const cov=_swBlurX.getImageData(0,0,sbw,sbh).data;
-    // SMOOTH DEPTH FIELD — heavily blurred distance-to-shore proxy: downscale the sharp mask to
-    // a tiny buffer then upscale back, so alpha ramps gradually from the deep centre (~1) out to
-    // the bank (~0) across the WHOLE body, not just the edge feather. This is what gives Bad
-    // North's broad shallow→mid→deep banding instead of a flat dark slab.
     if(!_swTinyC){ _swTinyC=document.createElement('canvas'); _swTinyX=_swTinyC.getContext('2d'); _swDeepC=document.createElement('canvas'); _swDeepX=_swDeepC.getContext('2d'); }
-    const tdim=Math.max(4,Math.min(30,Math.round(Math.max(sbw,sbh)*0.16)));
-    const tdw=Math.max(2,Math.round(sbw/Math.max(sbw,sbh)*tdim)), tdh=Math.max(2,Math.round(sbh/Math.max(sbw,sbh)*tdim));
+    if(!_swCovC){ _swCovC=document.createElement('canvas'); _swCovX=_swCovC.getContext('2d'); }
+    // COLOUR RESOLUTION — near the body's own size (capped), NOT the tiny blur buffer. The old
+    // path computed the whole colour field in the ~37px blur buffer and upscaled it, smearing
+    // every wave line and depth band into mush (the muddy/foggy look). The ramp, rings and foam
+    // are all pure functions of the smooth depth d, so we bake them into a 1-D lookup table and
+    // run the per-pixel pass at THIS high resolution with no exp() in the hot loop — giving crisp
+    // Bad-North banding and lapping lines for roughly the same cost. Runs on rebuild only.
+    const CAP=540, cw=Math.max(2,Math.min(bw,CAP)), ch=Math.max(2,Math.min(bh,Math.round(CAP*bh/bw)));
+    if(_swDepthC.width!==cw||_swDepthC.height!==ch){ _swDepthC.width=cw; _swDepthC.height=ch; }
+    if(_swDeepC.width!==cw||_swDeepC.height!==ch){ _swDeepC.width=cw; _swDeepC.height=ch; }
+    if(_swCovC.width!==cw||_swCovC.height!==ch){ _swCovC.width=cw; _swCovC.height=ch; }
+    // SMOOTH DEPTH FIELD — a blurred distance-to-shore proxy: downscale the sharp mask to a small
+    // buffer (broad shallow→deep banding) then upscale to colour res. Sized so a 1-tile river keeps
+    // a little cross-section depth (its banks read) while the lake still bands smoothly.
+    const tdim=Math.max(6,Math.min(22,Math.round(Math.max(bw,bh)*0.024)));
+    const tdw=Math.max(3,Math.round(bw/Math.max(bw,bh)*tdim)), tdh=Math.max(3,Math.round(bh/Math.max(bw,bh)*tdim));
     if(_swTinyC.width!==tdw||_swTinyC.height!==tdh){ _swTinyC.width=tdw; _swTinyC.height=tdh; }
-    if(_swDeepC.width!==sbw||_swDeepC.height!==sbh){ _swDeepC.width=sbw; _swDeepC.height=sbh; }
     _swTinyX.clearRect(0,0,tdw,tdh); _swTinyX.imageSmoothingEnabled=true; _swTinyX.imageSmoothingQuality='high';
     _swTinyX.drawImage(_swMaskC,0,0,bw,bh,0,0,tdw,tdh);
-    _swDeepX.clearRect(0,0,sbw,sbh); _swDeepX.imageSmoothingEnabled=true; _swDeepX.imageSmoothingQuality='high';
-    _swDeepX.drawImage(_swTinyC,0,0,tdw,tdh,0,0,sbw,sbh);
-    const dep=_swDeepX.getImageData(0,0,sbw,sbh).data;
-    const out=_swDepthX.createImageData(sbw,sbh), od=out.data;
-    const tph=t*0.00045;
-    // ripple rings ride the smooth depth field, drifting slowly shoreward
-    const r1=0.30+0.030*Math.sin(tph), r2=0.55+0.030*Math.sin(tph+2.1), r3=0.78+0.026*Math.sin(tph+4.2);
-    for(let p=0;p<cov.length;p+=4){
-      const c=cov[p+3]/255;                 // coverage (crisp edge)
-      if(c<=0.12){ od[p+3]=0; continue; }
-      const d=dep[p+3]/255;                  // smooth depth 0..1 (centre deep)
-      // colour ramp SH(shallow) -> MID -> DEEP across the smooth depth field
-      const wS=1-_ss(0.10,0.30,d), wM=_ss(0.14,0.34,d)*(1-_ss(0.46,0.74,d)), wD=_ss(0.48,0.80,d);
-      const wsum=wS+wM+wD||1;
-      let r =(C_SH[0]*wS+C_MID[0]*wM+C_DEEP[0]*wD)/wsum,
-          gg=(C_SH[1]*wS+C_MID[1]*wM+C_DEEP[1]*wD)/wsum,
-          b =(C_SH[2]*wS+C_MID[2]*wM+C_DEEP[2]*wD)/wsum;
-      // shoreline-parallel ripple contours on iso-depth bands — a bright crest with a faint
-      // trough just deeper of it, so each ring reads as a real wave line rather than a smudge.
-      const g1=Math.exp(-((d-r1)*(d-r1))/0.0013), g2=Math.exp(-((d-r2)*(d-r2))/0.0015), g3=Math.exp(-((d-r3)*(d-r3))/0.0017);
-      const crest=Math.min(1,g1+0.85*g2+0.7*g3);
-      const tr1=Math.exp(-((d-r1-0.05)*(d-r1-0.05))/0.0013), tr2=Math.exp(-((d-r2-0.05)*(d-r2-0.05))/0.0015), tr3=Math.exp(-((d-r3-0.05)*(d-r3-0.05))/0.0017);
-      const trough=Math.min(1,tr1+0.85*tr2+0.7*tr3);
-      const rk=crest*0.30; r+=(C_FOAM[0]-r)*rk; gg+=(C_FOAM[1]-gg)*rk; b+=(C_FOAM[2]-b)*rk;
-      const tk=trough*0.12; r*=(1-tk); gg*=(1-tk); b*=(1-tk);
-      // CRISP FOAM LINE — a thin bright band sitting just inside the bank (driven by coverage),
-      // not the whole wide feather, so it reads as a wet shoreline rather than fog.
-      const foam=_ss(0.36,0.50,c)*(1-_ss(0.50,0.66,c));
-      if(foam>0.01){ const k=Math.min(0.78,foam*0.92); r+=(C_FOAM[0]-r)*k; gg+=(C_FOAM[1]-gg)*k; b+=(C_FOAM[2]-b)*k; }
-      // WET-INK BANK just outside the foam (toward the bank) — a thin sumi-e darkening contour
-      const ink=_ss(0.18,0.32,c)*(1-_ss(0.32,0.48,c));
-      if(ink>0.02){ const k=ink*0.38; r*=(1-k); gg*=(1-k); b*=(1-k); }
-      od[p]=r|0; od[p+1]=gg|0; od[p+2]=b|0; od[p+3]=255;
+    _swDeepX.clearRect(0,0,cw,ch); _swDeepX.imageSmoothingEnabled=true; _swDeepX.imageSmoothingQuality='high';
+    _swDeepX.drawImage(_swTinyC,0,0,tdw,tdh,0,0,cw,ch);
+    const dep=_swDeepX.getImageData(0,0,cw,ch).data;
+    // CRISP COVERAGE — the sharpened mask alpha at colour res; drives the foam/ink gate exactly at the bank
+    _swCovX.clearRect(0,0,cw,ch); _swCovX.imageSmoothingEnabled=true; _swCovX.imageSmoothingQuality='high';
+    _swCovX.drawImage(_swMaskC,0,0,bw,bh,0,0,cw,ch);
+    const cov=_swCovX.getImageData(0,0,cw,ch).data;
+    const out=_swDepthX.createImageData(cw,ch), od=out.data;
+
+    // ---- depth -> appearance LUT (Bad-North palette, painterly) ----
+    const N=512, lutR=new Float32Array(N), lutG=new Float32Array(N), lutB=new Float32Array(N), lutFoam=new Float32Array(N), lutInk=new Float32Array(N);
+    const C_ABY=_rgbOf(shade(Pw,-60));
+    const mixc=(A,B,tt)=>[A[0]+(B[0]-A[0])*tt,A[1]+(B[1]-A[1])*tt,A[2]+(B[2]-A[2])*tt];
+    // LAPPING LINES (Bad-North signature): a crisp PERIODIC pulse marching along the (remapped)
+    // depth axis — a thin bright crest with a darker trough just behind it, repeated ~RINGN times
+    // from shore to centre. Concentric on the lake, bank-parallel (reads as flow) on the river,
+    // because both ride the same depth field. A finer secondary ripple sits between the main lines
+    // for surface detail. NO time term: the body is baked into a cached buffer (it never animates
+    // frame-to-frame), so any clock dependence would just reshuffle the pattern on every rebuild —
+    // i.e. it would visibly change each time you pan or zoom. Keeping it purely geometric makes the
+    // water identical on every rebuild.
+    const RINGN=7;
+    for(let i=0;i<N;i++){
+      const d=i/(N-1);
+      let col;                                   // multi-stop ramp: bright shallow shelf -> mid -> deep -> abyss
+      if(d<0.07)      col=mixc(C_FOAM,C_SH ,_ss(0.00,0.07,d));
+      else if(d<0.22) col=mixc(C_SH ,C_MID ,_ss(0.07,0.22,d));
+      else if(d<0.46) col=mixc(C_MID,C_DEEP,_ss(0.22,0.46,d));
+      else            col=mixc(C_DEEP,C_ABY,_ss(0.46,0.85,d));
+      let r=col[0],gg=col[1],b=col[2];
+      const ph=d*RINGN, fr=ph-Math.floor(ph);
+      const crest=Math.exp(-(fr*fr)/0.0085)+Math.exp(-((fr-1)*(fr-1))/0.0085);     // sharp bright leading edge (wrapped)
+      const trough=Math.exp(-((fr-0.17)*(fr-0.17))/0.0120);                        // darker trailing edge (deeper side)
+      const inkedge=Math.exp(-((fr-0.90)*(fr-0.90))/0.0060);                       // thin ink line on the SHOREWARD side
+      const ph2=d*RINGN*2.0+0.5, fr2=ph2-Math.floor(ph2);                          // finer secondary ripple
+      const crest2=Math.exp(-(fr2*fr2)/0.013)+Math.exp(-((fr2-1)*(fr2-1))/0.013);
+      const fade=0.35+0.65*(1-_ss(0.30,0.95,d));                                    // strong near shore, faint in the deep
+      const fade2=1-_ss(0.04,0.50,d);                                              // secondary ripples live in the shallows
+      const ck=(crest*0.62 + crest2*0.20*fade2)*fade;                             // bright crest core
+      const tk=(trough*0.32 + inkedge*0.30)*fade;                                 // dark on BOTH sides -> outlined ukiyo-e wave
+      r+=(C_FOAM[0]-r)*ck; gg+=(C_FOAM[1]-gg)*ck; b+=(C_FOAM[2]-b)*ck;
+      r*=(1-tk); gg*=(1-tk); b*=(1-tk);
+      lutR[i]=r; lutG[i]=gg; lutB[i]=b;
+      lutFoam[i]=_ss(0.015,0.085,d)*(1-_ss(0.085,0.205,d));   // bright surf shelf right at the waterline
+      lutInk[i] =(1-_ss(0.0,0.045,d));                        // sumi-e darkening at the very edge
+    }
+    // depth-remap LUT: the distance-to-shore proxy saturates quickly toward the centre, which
+    // crowds every ring against the bank. A gamma<1 expands the shallow band so the near-shore
+    // lapping lines spread into distinct strokes while the calm deep centre still plateaus.
+    const REM=256, remap=new Float32Array(REM);
+    for(let i=0;i<REM;i++){ remap[i]=Math.pow(i/(REM-1),0.66); }
+
+    // ---- per-pixel composite: organic wave wobble + LUT index + foam/ink gate + paper grain ----
+    const sxk=bw/cw, syk=bh/ch;
+    for(let ly=0,p=0; ly<ch; ly++){
+      const wy=ly*syk+minY;
+      for(let lx=0; lx<cw; lx++, p+=4){
+        const c=cov[p+3]/255;
+        if(c<=0.10){ od[p+3]=0; continue; }
+        const wx=lx*sxk+minX;
+        // ORGANIC WAVER — perturb the depth by a smooth low-frequency world-space noise so the
+        // lapping lines undulate like brushed strokes instead of mechanical concentric contours.
+        // Two octaves: broad meander + finer ripple. World-seeded, so it never reshuffles.
+        const d0=dep[p+3]/255;
+        // waver only the near-shore lapping band; let open water stay calm (cleaner, and truer to
+        // Bad North, where the deep is still and the motion lives at the coast).
+        const wf=1-_ss(0.30,0.66,d0);
+        let d=d0 + ((_vnoise(wx*0.055,wy*0.055)-0.5)*0.034 + (_vnoise(wx*0.140+19,wy*0.140+7)-0.5)*0.018)*wf;
+        if(d<0)d=0; else if(d>1)d=1;
+        const dr=remap[(d*255)|0];
+        const idx=dr>=1?N-1:(dr*(N-1))|0;
+        let r=lutR[idx], gg=lutG[idx], b=lutB[idx];
+        const fo=lutFoam[idx]*_ss(0.28,0.56,c);                 // bright surf line, hugs the true bank
+        if(fo>0.01){ const kk=fo>0.92?0.92:fo*1.22; r+=(C_FOAM[0]-r)*kk; gg+=(C_FOAM[1]-gg)*kk; b+=(C_FOAM[2]-b)*kk;
+          // stippled surf — bright broken flecks scattered along the foam band so the waterline
+          // reads as breaking surf, not a clean painted stroke. World-seeded -> stable.
+          if(fo>0.18){ const fl=_ihash01((wx*2.7)|0,(wy*2.7)|0); if(fl>0.62){ const fk=fo*(fl-0.62)*1.7; r+=(255-r)*fk; gg+=(255-gg)*fk; b+=(255-b)*fk; } } }
+        const ik=lutInk[idx]*_ss(0.16,0.42,c)*(1-_ss(0.42,0.62,c));
+        if(ik>0.02){ const kk=ik*0.5; r*=(1-kk); gg*=(1-kk); b*=(1-kk); }
+        // MOONLIGHT REFLECTION — soft vertical shimmer columns drifting across the open water, the
+        // wavering specular the eye reads as a reflective surface under a moon. World-locked
+        // (function of body-space position), gated to deeper water so the shallows stay clean.
+        if(d0>0.22){
+          const rf=Math.sin(wx*0.052 + (_vnoise(wx*0.018,wy*0.048)-0.5)*3.6);
+          const rk=(rf>0?rf*rf*rf:0)*_ss(0.22,0.52,d0)*0.075;
+          r+=(C_FOAM[0]-r)*rk; gg+=(C_FOAM[1]-gg)*rk; b+=(C_FOAM[2]-b)*rk;
+        }
+        // watercolour granulation — cheap trig-free hash mottle, pooling stronger in the deep
+        // where pigment settles. World-seeded -> locked on pan/zoom.
+        const gn=_ihash01((wx*7.3)|0,(wy*7.3)|0)-0.5;
+        const ga=gn*(5.5+3*d);
+        r+=ga; gg+=ga*0.96; b+=ga*0.9;
+        od[p]=r<0?0:r>255?255:r|0; od[p+1]=gg<0?0:gg>255?255:gg|0; od[p+2]=b<0?0:b>255?255:b|0; od[p+3]=255;
+      }
     }
     _swDepthX.putImageData(out,0,0);
     _swLayerX.imageSmoothingEnabled=true; _swLayerX.imageSmoothingQuality='high';
-    _swLayerX.drawImage(_swDepthC,0,0,sbw,sbh,0,0,bw,bh);
+    _swLayerX.drawImage(_swDepthC,0,0,cw,ch,0,0,bw,bh);
   } else {
     _swLayerX.fillStyle=shade(Pw,-20); _swLayerX.fillRect(0,0,bw,bh);
   }
@@ -1251,7 +1352,7 @@ function drawSpiritWaterBody(g,z,t){
     if(waterNeighbors(tx,ty).deg<3)continue;            // open-water (pond) tiles only
     const h0=vhash(tx*1.7+ty*0.3, ty*2.1+11);
     if(h0>0.5)continue;                                  // ~half the tiles get a glint
-    const ph=h0*6.28, tw=0.5+0.5*Math.sin(t*0.0011+ph*3.1);
+    const tw=0.4+0.6*vhash(tx*3.3+1,ty*2.7+5);          // fixed per-glint brightness (no clock -> stable on zoom/pan)
     const gx=cx-minX+(vhash(tx+3,ty*5+7)-0.5)*hw*0.9, gy=cy-minY+(vhash(tx*5+1,ty+9)-0.5)*hh*0.9;
     const gr2=Math.max(0.7,hh*0.10)*(0.7+0.3*tw);
     const sgr=_swLayerX.createRadialGradient(gx,gy,0,gx,gy,gr2*2.6);
@@ -1281,17 +1382,12 @@ function drawSpiritWaterBody(g,z,t){
   g.save(); g.setTransform(1,0,0,1,0,0);
   g.drawImage(_swLayerC,0,0,bw,bh, cam.x+minX*z, cam.y+minY*z, bw*z, bh*z);
   g.restore();
-  // 8) re-stamp icicles on top of the body — they were drawn per-tile during the terrain
-  //    pass (paintFrozenEdge) but the body's bloom/wash just painted over them; redraw here
-  //    so the frozen waterfall hangs visibly off the now-seamless edge.
-  for(const[cx,cy,tx,ty,fz]of cells){ if(!fz)continue;
-    const fc=grid[ty][tx]; const[scx,scy]=s2(tx,ty); const shw=TW/2*z, shh=TH/2*z;   // these draw on the real screen buffer, not the z=1 body buffer
-    g.globalAlpha=0.5; g.strokeStyle='rgba(247,252,254,0.85)'; g.lineWidth=0.7*z;
-    g.beginPath();g.moveTo(scx-shw*0.32,scy-shh*0.08);g.lineTo(scx+shw*0.06,scy-shh*0.42);g.lineTo(scx+shw*0.34,scy+0.02);g.stroke();
-    g.strokeStyle='rgba(118,148,164,0.5)';
-    g.beginPath();g.moveTo(scx-shw*0.2,scy+shh*0.22);g.lineTo(scx+shw*0.22,scy-shh*0.04);g.stroke(); g.globalAlpha=1;
-    paintFrozenEdge(g,tx,ty,fc,scx,scy,shw,shh,z);
-  }
+  // NOTE: the frozen waterfall that POURS OVER THE RIM is no longer stamped here. Anything drawn
+  // into the ground buffer is clipped to the island footprint by clipGroundToShoreline and then
+  // covered by paintIslandCliff, which buried the overflow inside the rim (the reported bug).
+  // It is now painted by paintFrozenWaterfall() into the world buffer AFTER the cliff, so it
+  // visibly cascades past the edge into the void. The on-surface ice (the frozen river top) is
+  // still handled here via the icy bloom above + drawFrozenWater in the terrain pass.
 }
 
 
@@ -1340,6 +1436,94 @@ function paintFrozenEdge(g,tx,ty,c,cx,cy,hw,hh,z){
     g.strokeStyle='rgba(120,170,196,0.6)'; g.lineWidth=0.9*z;                       // cold inner glow along the lip
     g.beginPath(); g.moveTo(A[0],A[1]); g.lineTo(Bp[0],Bp[1]); g.stroke();
   }
+}
+/* FROZEN WATERFALL — the river's terminus POURING OVER the front rim into the void. Drawn into
+   the FINAL world buffer AFTER paintIslandCliff, in screen space, so it cascades down over the
+   earth-rock cliff and hangs past its base — never clipped to the island footprint and never
+   buried by the rim (the reported bug, where the overflow was stamped into the ground buffer and
+   cut away). The fall length is keyed to the cliff drop so it always clears the wall and dangles
+   icicles into the abyss. Seeded from fixed tile coords -> stable across pan/zoom. */
+function paintFrozenWaterfall(g,z){
+  g.save(); g.setTransform(1,0,0,1,0,0); g.lineJoin='round';
+  const hw=TW/2*z, hh=TH/2*z;
+  const cliff=Math.max(9, TH*z*1.62);            // mirrors paintIslandCliff's baseH — the wall the water spills over
+  for(let ty=0;ty<H;ty++)for(let tx=0;tx<W;tx++){ const c=grid[ty][tx];
+    if(!(c.ter===WATER&&c.frozen))continue;
+    const[cx,cy]=s2(tx,ty);
+    if(cx<-TW*z*2||cx>VW+TW*z*2||cy<-TH*z*2||cy>VH+TH*z*10)continue;
+    const B=[cx,cy+hh],L=[cx-hw,cy],R=[cx+hw,cy];
+    const seed=c.seed!=null?c.seed:(tx*7+ty*3)%97/97;
+    const front=[[tx,ty+1,B,L,41],[tx+1,ty,R,B,67]];
+    for(const[nx,ny,A,Bp,salt] of front){
+      if(!isVoidFace(nx,ny))continue;                                   // only the faces that open to the abyss
+      const dx=Bp[0]-A[0], dy=Bp[1]-A[1];
+      const sheet=cliff*1.30;                                           // curtain reaches further past the cliff base
+      // 1) the spilling SHEET: lip edge A->Bp, falling as a softly waving frozen curtain, with a
+      //    jagged needle-icicle hem clearing the cliff base.
+      const segs=8+((vhash(seed,salt)*4)|0); const hem=[]; let maxd=0;
+      for(let i=0;i<=segs;i++){ const tt=i/segs;
+        const inset=hw*0.07*Math.sin(tt*Math.PI);                       // gentle inward gather
+        const ex=A[0]+dx*tt + (vhash(seed,salt+i*23+9)*2-1)*hw*0.045 - inset;
+        const ey=A[1]+dy*tt;
+        const nd=sheet*(0.86+0.22*vhash(seed,salt+i*7)); hem.push([ex,ey+nd]); if(nd>maxd)maxd=nd;
+        if(i<segs){ const mt=(i+0.5)/segs;                              // long needle clearing the base
+          const mx=A[0]+dx*mt+(vhash(seed,salt+i*33+11)*2-1)*hw*0.045, my=A[1]+dy*mt;
+          const td=sheet*(1.5+1.15*vhash(seed,salt+i*13+5)); hem.push([mx,my+td]); if(td>maxd)maxd=td; } }
+      g.beginPath(); g.moveTo(A[0],A[1]); g.lineTo(Bp[0],Bp[1]);
+      for(let i=hem.length-1;i>=0;i--) g.lineTo(hem[i][0],hem[i][1]);
+      g.closePath();
+      const gr=g.createLinearGradient(0,A[1],0,A[1]+maxd);
+      gr.addColorStop(0.00,'rgba(231,244,249,0.96)');                   // bright moonlit lip where it tips over
+      gr.addColorStop(0.16,'rgba(204,225,234,0.90)');
+      gr.addColorStop(0.44,'rgba(172,200,216,0.70)');                   // glassy mid-fall
+      gr.addColorStop(0.72,'rgba(146,178,200,0.42)');
+      gr.addColorStop(0.90,'rgba(132,164,190,0.20)');
+      gr.addColorStop(1.00,'rgba(126,158,184,0)');                      // dissolves into the void
+      g.fillStyle=gr; g.fill();
+      // 2) vertical crystalline striations streaming down the curtain (the frozen-flow tell)
+      g.lineCap='round';
+      for(let i=0;i<=segs;i++){ const tt=i/segs; const mx=A[0]+dx*tt, my=A[1]+dy*tt;
+        const ln=sheet*(0.8+1.05*vhash(seed,salt+i*13+5));
+        g.strokeStyle='rgba(244,251,254,'+(0.16+0.22*vhash(seed,salt+i*5)).toFixed(3)+')'; g.lineWidth=(0.5+0.5*vhash(seed,salt+i*9))*z;
+        g.beginPath(); g.moveTo(mx,my); g.lineTo(mx+(vhash(seed,salt+i*3)*2-1)*hw*0.04, my+ln); g.stroke();
+        g.strokeStyle='rgba(120,156,182,'+(0.10+0.14*vhash(seed,salt+i*11)).toFixed(3)+')'; g.lineWidth=0.5*z;   // cool shadow rib beside it
+        g.beginPath(); g.moveTo(mx+1.1*z,my); g.lineTo(mx+1.1*z,my+ln*0.8); g.stroke(); }
+      g.lineCap='butt';
+      // 3) STALACTITES — long tapered icicles dangling DEEP into the void, spaced across the lip,
+      //    sharp moonlit tips. The whole point of the spill: ice hanging far past the rim.
+      const NIC=5;
+      for(let s=0;s<NIC;s++){
+        const ft=(s+0.5+(vhash(seed,salt+200+s*17)*2-1)*0.20)/NIC;      // spread across the lip width
+        const baseX=A[0]+dx*ft + (vhash(seed,salt+s*33)*2-1)*hw*0.05, baseY=A[1]+dy*ft;
+        const dripLen=sheet*(1.35+1.7*vhash(seed,salt+s*41));           // several reach WAY down into the abyss
+        const wTop=(1.7+1.1*vhash(seed,salt+s*7))*z;
+        const tipX=baseX+(vhash(seed,salt+s*53)*2-1)*hw*0.05, tipY=baseY+dripLen;
+        g.beginPath(); g.moveTo(baseX-wTop,baseY); g.lineTo(baseX+wTop,baseY); g.lineTo(tipX+0.4*z,tipY); g.closePath();
+        const ig=g.createLinearGradient(0,baseY,0,tipY);
+        ig.addColorStop(0,'rgba(228,242,247,0.94)'); ig.addColorStop(0.45,'rgba(184,210,222,0.55)'); ig.addColorStop(0.82,'rgba(160,190,206,0.26)'); ig.addColorStop(1,'rgba(150,182,200,0)');
+        g.fillStyle=ig; g.fill();
+        g.strokeStyle='rgba(250,254,255,0.5)'; g.lineWidth=0.5*z;       // crisp lit edge down one side
+        g.beginPath(); g.moveTo(baseX-wTop*0.3,baseY); g.lineTo(tipX,tipY); g.stroke();
+        g.fillStyle='rgba(245,251,254,0.85)';                          // bright frozen bead at the tip
+        g.beginPath(); g.arc(tipX,tipY,Math.max(0.6,wTop*0.34),0,7); g.fill();
+        // 4) a frozen droplet hanging detached in the void below the longest icicles — mid-drip,
+        //    flash-frozen, catching the moon
+        if(dripLen>sheet*2.1 && vhash(seed,salt+s*61)<0.7){
+          const dgap=dripLen*0.14+5*z, dyb=tipY+dgap, dr=Math.max(0.9,wTop*0.55);
+          const dgr=g.createRadialGradient(tipX,dyb,0,tipX,dyb,dr*1.6);
+          dgr.addColorStop(0,'rgba(236,247,251,0.8)'); dgr.addColorStop(0.6,'rgba(186,212,224,0.4)'); dgr.addColorStop(1,'rgba(186,212,224,0)');
+          g.fillStyle=dgr; g.beginPath(); g.arc(tipX+(vhash(seed,salt+s*71)*2-1)*2*z,dyb,dr*1.6,0,7); g.fill();
+        }
+      }
+      // 5) crisp moonlit crest right on the lip — the bright break where flowing water freezes mid-spill
+      g.strokeStyle='rgba(248,253,255,0.85)'; g.lineWidth=1.3*z; g.lineCap='round';
+      g.beginPath(); g.moveTo(A[0],A[1]); g.lineTo(Bp[0],Bp[1]); g.stroke();
+      g.strokeStyle='rgba(150,186,206,0.45)'; g.lineWidth=0.7*z;                      // faint cool underline
+      g.beginPath(); g.moveTo(A[0],A[1]+1.4*z); g.lineTo(Bp[0],Bp[1]+1.4*z); g.stroke();
+      g.lineCap='butt';
+    }
+  }
+  g.restore();
 }
 /* FROZEN TUNDRA: barren icy ground forming the cold rim — pale desaturated grey-blue, quiet and
    treeless, with rare tasteful Solana crystal specks. Keeps the sumi-e mono feel but reads cold. */
@@ -2593,15 +2777,17 @@ function drawAgent(g,cx,cy,z,a,noShadow){ if(!noShadow) shadowEllipse(g,cx,cy,a.
   if(a.kind==='cart') drawCart(g,cx,cy,z,a); else if(a.kind==='ronin') drawRonin(g,cx,cy,z,a,a.dir<0?-1:1);
   else if(a.kind==='animal') drawCritter(g,cx,cy,z,a,a.dir<0?-1:1);
   else if(a.kind==='prop') drawHumanProp(g,cx,cy,z,a);
-  else { const frozen=(a.act==='idle'||a.act==='temple'||a.act==='water'||a.act==='work'||a.watch>0);
+  else { const frozen=(a.act==='idle'||a.act==='temple'||a.act==='water'||a.act==='work'||a.act==='gather'||a.act==='play'||a.watch>0);
     const posed=Object.assign({},a,{moving:a.moving&&!frozen});
     drawPerson(g,cx,cy,z,posed,a.dir<0?-1:1,a.scale||1);
     if(a.act==='temple') drawPrayerPose(g,cx,cy,z,a);
     else if(a.act==='water') drawWatersidePose(g,cx,cy,z,a);
     else if(a.act==='work') drawTendingPose(g,cx,cy,z,a);
     else if(a.watch>0) drawWatchPose(g,cx,cy,z,a);
+    else if(a.greet>0) drawGreetCue(g,cx,cy,z,a);
+    else if(a.act==='play') drawPlayCue(g,cx,cy,z,a);
     else if(a.talkWith) drawTalkCue(g,cx,cy,z,a);
-    else if(a.act==='idle'&&a.nerve===undefined) drawLookAroundCue(g,cx,cy,z,a);
+    else if((a.act==='idle'||a.act==='gather')&&a.nerve===undefined){ if(a.mood!==undefined&&a.mood<0.30) drawWearyCue(g,cx,cy,z,a); else drawLookAroundCue(g,cx,cy,z,a); }
     if(a.nerve!==undefined){ if(a.respectful) drawRespectCue(g,cx,cy,z,a); else drawNervousCue(g,cx,cy,z,a); } } }
 /* a brief downward bow of clasped hands at a temple/shrine — read at a glance as quiet reverence */
 function drawPrayerPose(g,cx,cy,z,a){ g.save(); g.translate(cx,cy-7*z); g.rotate(0.16);
@@ -2638,6 +2824,22 @@ function drawLookAroundCue(g,cx,cy,z,a){ const s=Math.sin((a.ph||0)*0.6)*0.5*z;
 /* two paired idlers facing slightly inward, as if in conversation — a small standing group */
 function drawTalkCue(g,cx,cy,z,a){ const lean=(a.talkWith.x>a.x?1:-1)*0.6*z;
   g.fillStyle='rgba(255,255,255,0.05)'; g.beginPath(); g.ellipse(cx+lean,cy-9.2*z,1*z,0.6*z,0,0,7); g.fill(); }
+/* a passing nod between neighbours — a quick forward dip of the head as two acquaintances cross.
+   `greet` is a short countdown so the bob eases in and out rather than snapping. */
+function drawGreetCue(g,cx,cy,z,a){ const k=Math.sin(Math.min(1,(a.greet||0)/0.9)*Math.PI); // 0..1..0 over the greeting
+  g.save(); g.translate(cx,cy-8.8*z); g.rotate(0.18*k);
+  g.fillStyle='rgba(20,16,10,0.18)'; g.beginPath(); g.ellipse(0,-0.4*z,0.9*z,1.1*z,0,0,7); g.fill();
+  g.restore(); }
+/* a child at play: a small bouncing hop, more eager when chasing a yokai (`excited`). Purely
+   cosmetic — a faint shadow lift and a little arc above the head. */
+function drawPlayCue(g,cx,cy,z,a){ const sp=(a.excited>0?11:6), hop=Math.abs(Math.sin((a.ph||0)*sp))*(a.excited>0?2.4:1.4)*z;
+  g.fillStyle='rgba(20,16,10,0.16)'; g.beginPath(); g.ellipse(cx,cy+0.4*z,1.2*z,0.5*z,0,0,7); g.fill();   // ground shadow stays put
+  g.fillStyle='rgba(255,255,255,0.07)'; g.beginPath(); g.ellipse(cx,cy-9.5*z-hop,0.8*z,0.5*z,0,0,7); g.fill(); }
+/* the slump of a destitute ward: heavy shoulders, a low weary stoop. Drawn for idlers whose
+   home land-value mood is bleak — the human cost of poverty read in the body. */
+function drawWearyCue(g,cx,cy,z,a){ g.save(); g.translate(cx,cy-7.6*z); g.rotate(0.12);
+  g.fillStyle='rgba(20,16,10,0.20)'; g.beginPath(); g.ellipse(0,0.4*z,1.3*z,0.8*z,0,0,7); g.fill();        // bowed, sunken posture
+  g.restore(); }
 /* a witness too far to flee but close enough to stop and stare at a disturbance — frozen,
    leaning either fearfully back (curled inward) or curiously forward (craning to see). The
    split is a single seeded coin-flip per witness so the same figure reads consistently for
@@ -2661,7 +2863,13 @@ function syncGroupTalk(){ const idlers=[];
   for(const u of idlers)u.talkWith=null;
   for(let i=0;i<idlers.length;i++){ const u=idlers[i]; if(u.talkWith)continue;
     for(let j=i+1;j<idlers.length;j++){ const v=idlers[j]; if(v.talkWith)continue;
-      if(Math.hypot(u.x-v.x,u.y-v.y)<0.9){ u.talkWith=v; v.talkWith=u; break; } } } }
+      if(Math.hypot(u.x-v.x,u.y-v.y)<0.9){ u.talkWith=v; v.talkWith=u; break; } } }
+  // passing greetings: two moving neighbours (homes close by) who cross paths exchange a brief nod
+  const movers=[]; for(const r of residents) if(!r.claimed&&!(r.flee>0)&&r.moving&&!(r.greet>0)&&!(r.greetCool>0))movers.push(r);
+  for(let i=0;i<movers.length;i++){ const u=movers[i]; if(u.greet>0)continue;
+    for(let j=i+1;j<movers.length;j++){ const v=movers[j]; if(v.greet>0||v.greetCool>0)continue;
+      if(Math.hypot(u.x-v.x,u.y-v.y)<1.4 && Math.hypot(u.home[0]-v.home[0],u.home[1]-v.home[1])<8){
+        u.greet=0.9; v.greet=0.9; u.greetCool=8+Math.random()*7; v.greetCool=8+Math.random()*7; break; } } } }
 
 /* ---- fire (detailed, animated) ---- */
 function flameTongue(g,x,base,w,h,col){ g.fillStyle=col; g.beginPath();
@@ -3616,6 +3824,10 @@ function rebuildWorld(){ const z=cam.zoom;
   // artifacts). Thickness is gated by the outward-normal so the wall lives only on the front/lower
   // silhouette and dissolves on the back/flanks — isometrically correct (Master Spec §10).
   paintIslandCliff(wctx,z);
+  // FROZEN WATERFALL OVERFLOW: the river's terminus spills over the cliff into the void. Painted
+  // AFTER the cliff (and never clipped to the footprint), so it hangs past the rim instead of
+  // being buried inside it.
+  if(VOID) paintFrozenWaterfall(wctx,z);
   // DISTANT SILHOUETTE: when zoomed out, wrap the whole landmass in one soft ink contour +
   // faint glow so it reads as a single dramatic floating mass rather than a field of tiny
   // tile facets. Traced once from the already-computed shore tiles, drawn under the grain.
@@ -3684,7 +3896,7 @@ function render(){ ctx.setTransform(DPR,0,0,DPR,0,0);
       if(txLo<0)txLo=0; if(txHi>W-1)txHi=W-1;
       for(let tx=txLo;tx<=txHi;tx++){ const ty=S-tx; if(ty<0||ty>=H)continue;
         const c=grid[ty][tx];
-        if(c.ter===FOREST&&!occupied(c)&&!c.civ&&waterNeighbors(tx,ty).deg===0){
+        if(c.ter===FOREST&&!occupied(c)&&!c.civ&&!nearSpiritWater(tx,ty)){
           if(!_shorePoly){ acts.push({tx,ty,k:'tree',d:S}); }
           else { const[_tcx,_tcy]=s2(tx,ty); if(_ptInPoly(_tcx,_tcy,_shorePoly)) acts.push({tx,ty,k:'tree',d:S}); }
         }
@@ -3968,7 +4180,8 @@ function syncResidents(){ const homes=[]; for(let y=0;y<H;y++)for(let x=0;x<W;x+
       spd:0.9+Math.random()*0.6,ph:Math.random()*6,pause:Math.random()*2,kind:'ped',dir:1,moving:false,act:'walk',trait:TRAITS[(Math.random()*TRAITS.length)|0]}, kit));}
   for(const r of residents){const c=grid[r.home[1]]&&grid[r.home[1]][r.home[0]];
     if(!c||!(c.zone===ZR&&c.dev>0||c.civ===TOWN)){if(homes.length){r.home=homes[(Math.random()*homes.length)|0];r.work=findWork(r.home[0],r.home[1]);r.x=r.home[0];r.y=r.home[1];r.goal='home';}}
-    else if(!r.work)r.work=findWork(r.home[0],r.home[1]); } }
+    else if(!r.work)r.work=findWork(r.home[0],r.home[1]);
+    if(r.type==='child'){ r.work=null; if(r.goal==='out')r.goal='home'; } } }
 /* free-moving agents (citizens, ronin) step in straight lines toward a goal with no terrain
    awareness, so they used to wade across the lake/river and trudge through (and visually
    behind) farm fields. walkBlocked marks those tiles impassable; moveClamp tries the full
@@ -3976,20 +4189,77 @@ function syncResidents(){ const homes=[]; for(let y=0;y<H;y++)for(let x=0;x<W;x+
    instead of stopping dead or cutting through it. */
 function walkBlocked(x,y){ const tx=Math.round(x), ty=Math.round(y); if(!inB(tx,ty))return true; const c=grid[ty][tx]; return c.ter===WATER||c.civ===FARM; }
 function moveClamp(a,nx,ny){ if(!walkBlocked(nx,ny)){a.x=nx;a.y=ny;return;} if(!walkBlocked(nx,a.y)){a.x=nx;return;} if(!walkBlocked(a.x,ny)){a.y=ny;return;} }
-function updateResidents(dt){ const tod=(typeof ENV!=='undefined')?ENV.t:0.4; const dayTime=tod>0.28&&tod<0.78;
+/* ============================ LIVING-TOWN PERSONALITY HELPERS ============================
+   Daily rhythm, per-age collective temperament, land-value mood, gathering spots ("third
+   places"), and friendly-yokai curiosity. All read existing sim state — no new grids/UI. */
+/* time-of-day phase off ENV.t: night empties the streets, dawn wakes early risers, day is the
+   bustle, dusk is the homeward tide. Drives whether a citizen commutes, strolls, or stays in. */
+function dayPhase(){ const t=(typeof ENV!=='undefined')?ENV.t:0.4;
+  if(t<0.20||t>0.86) return 'night';
+  if(t<0.30) return 'dawn';
+  if(t<0.74) return 'day';
+  return 'dusk'; }
+/* per-age collective mood. HEIAN(5) is the serene golden peak; KAMAKURA/SENGOKU(6-7) are tense
+   war ages — hurried, fewer idlers, more ambient unease; QUANTUM EDO(8) a lively rebirth.
+   Returns leisure/pause/speed/social multipliers + a 0..1 `tense` flag the voices also read. */
+function eraTemperament(){ const e=(typeof S!=='undefined')?S.era:3;
+  if(e===5) return {leisure:1.7, pause:1.35, speed:0.92, tense:0,    social:1.4};   // HEIAN — serene strolling
+  if(e===6) return {leisure:0.7, pause:0.85, speed:1.10, tense:0.35, social:0.9};   // KAMAKURA — unsettled
+  if(e===7) return {leisure:0.4, pause:0.65, speed:1.24, tense:0.7,  social:0.7};   // SENGOKU — fearful, hurried
+  if(e===8) return {leisure:1.4, pause:1.1,  speed:1.0,  tense:0,    social:1.5};   // QUANTUM EDO — rebirth, lively
+  return {leisure:1.0, pause:1.0, speed:1.0, tense:0, social:1.0}; }                // ascent ages — neutral
+/* land-value mood at a tile: 1 = comfortable, 0 = destitute. The spec's single human-cost dial,
+   now read by the people themselves — poor wards walk slower, hunch, stroll less, sound wearier. */
+function moodAt(x,y){ if(typeof valueGrid==='undefined'||!valueGrid)return 0.6;
+  const ix=Math.round(x),iy=Math.round(y); if(!inB(ix,iy))return 0.6; return valueGrid[iy][ix]; }
+/* nearest "third place" to gather — a shrine forecourt or a developed market stall. Returns a
+   walkable land tile at its threshold so figures cluster around it, not inside it. */
+function nearestGather(hx,hy){ let best=null,bd=1e9;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){ const c=grid[y][x];
+    if(!(c.civ===TEMPLE||(c.zone===ZC&&c.dev>0)))continue;
+    const d=Math.abs(x-hx)+Math.abs(y-hy); if(d<bd&&d<26){bd=d;best=[x,y];} }
+  if(!best)return null;
+  const ox=best[0]+(hx>best[0]?1:hx<best[0]?-1:0), oy=best[1]+(hy>best[1]?1:hy<best[1]?-1:0);
+  return (inB(ox,oy)&&!walkBlocked(ox,oy))?[ox,oy]:best; }
+/* a friendly ground-yokai a child would run toward (kitsune/tanuki/tennyo/kappa). Returns a
+   walkable land tile beside it within an excited-approach radius, else null. Oni/snow excluded. */
+const KID_FRIENDLY_YOKAI={kitsune:1,tanuki:1,tennyo:1,kappa:1};
+function nearbyFriendlyYokai(hx,hy){ if(typeof apparitions==='undefined')return null;
+  for(const a of apparitions){ if(!KID_FRIENDLY_YOKAI[a.kind])continue;
+    if(Math.hypot(a.x-hx,a.y-hy)<6.5){ let bx=Math.round(a.x),by=Math.round(a.y);
+      if(walkBlocked(bx,by)){ for(const[dx,dy]of NEIGH){ if(!walkBlocked(bx+dx,by+dy)){bx+=dx;by+=dy;break;} } }
+      return [bx,by]; } } return null; }
+
+function updateResidents(dt){ const phase=dayPhase(); const dayTime=(phase==='day'); const T=eraTemperament();
+  // panic ripples outward: anyone already fleeing seeds fear in neighbours over the next frames
+  const fleers=[]; for(const r of residents) if(!r.claimed&&r.flee>0)fleers.push(r);
   for(const r of residents){ if(r.claimed)continue; if(r.flee>0)r.flee-=dt;
+    if(r.greet>0)r.greet-=dt; if(r.greetCool>0)r.greetCool-=dt; if(r.excited>0)r.excited-=dt;
     // ---- nervousness near a passing ronin warband (ambient avoidance, distinct from active-raid flee) ----
     if(!(r.flee>0)){ let near=false; for(const e of encounters){ if(!e.mob)continue; for(const m of e.mob){ if(Math.hypot(m.x-r.x,m.y-r.y)<2.6){near=true;break;} } if(near)break; }
       if(near){ if(r.nerve===undefined){ r.nerve=Math.random(); r.respectful=Math.random()<0.22; } } else { r.nerve=undefined; r.respectful=undefined; } }
-    if(r.watch>0){ r.watch-=dt; if(r.watch<=0)r.watch=undefined; else { r.moving=false; r.ph+=dt*1.5; continue; } } // watching a nearby disturbance — frozen, staring
+    // ONLOOKER RING — a live skirmish draws a crowd: residents a little further out stop and stare
+    // rather than the street going on as if nothing's happening. They scatter the moment blood is
+    // drawn (scatterWitnesses on each kill already flips watchers to fleers).
+    if(!(r.flee>0)&&!(r.watch>0)){ for(const e of encounters){ if((e.state==='duel'||e.state==='assault')){ const dd=Math.hypot((e.rtx)-r.x,(e.rty)-r.y);
+      if(dd<2.4){ r.flee=Math.max(r.flee||0,1.0); break; }                                   // too close — back off
+      if(dd<5.8 && Math.random()<0.5){ r.watch=Math.max(r.watch||0,1.4+Math.random()*1.6); r.watchX=e.rtx; r.watchY=e.rty; break; } } } }
+    // ---- panic contagion: catch fear from a fleeing neighbour before the threat itself arrives ----
+    if(fleers.length && !(r.flee>0)){ let nd=1e9; for(const f of fleers){ const dd=Math.hypot(f.x-r.x,f.y-r.y); if(dd<nd)nd=dd; }
+      if(nd<2.2){ if(Math.random()<0.5) r.flee=Math.max(r.flee||0,1.4); else if(!(r.watch>0)) r.watch=Math.max(r.watch||0,1.6+Math.random()*1.4); }
+      else if(nd<4.6 && !(r.watch>0) && Math.random()<0.3) r.watch=Math.max(r.watch||0,1.2+Math.random()*1.2); }
+    if(r.watch>0){ r.watch-=dt; if(r.watch<=0){r.watch=undefined;r.watchX=undefined;r.watchY=undefined;} else { r.moving=false; if(r.watchX!=null)r.dir=(r.watchX-r.x)<0?-1:1; r.ph+=dt*1.5; continue; } } // watching a nearby disturbance — frozen, staring toward it
     if(r.pause>0){ r.pause-=dt; r.moving=false;
-      if(r.act==='water'||r.act==='temple')r.ph+=dt*1.5;
+      if(r.act==='water'||r.act==='temple'||r.act==='play'||r.act==='gather')r.ph+=dt*1.5;
       if(r.act==='water'&&r.fishing&&!r.caught&&r.pause<=r.pause0*0.55&&Math.random()<0.35*dt){ r.caught=FISH[(Math.random()*FISH.length)|0]; r.caughtT=2; } // bite partway through the sit
       if(r.caughtT!==undefined){ r.caughtT-=dt; if(r.caughtT<=0)r.caughtT=undefined; }
       continue; }
-    // choose destination: commute to work by day, leisure detour or home otherwise
+    const isChild=(r.type==='child'); const mood=moodAt(r.home[0],r.home[1]); r.mood=mood;
+    // dusk/night cancels any stroll in progress — the streets pull homeward
+    if((phase==='dusk'||phase==='night') && r.goal==='leisure'){ r.goal='home'; r.leisureSpot=null; }
+    // choose destination: commute to work in working hours, stroll, or head home
     let dest;
-    if(r.work && r.goal==='out' && dayTime){ dest=r.work; }
+    if(r.work && r.goal==='out' && dayTime && !isChild){ dest=r.work; }
     else if(r.goal==='leisure' && r.leisureSpot){ dest=r.leisureSpot; }
     else { dest=r.home; r.goal='home'; }
     const gx=dest[0]+(r.goal==='home'?(r.jx||0):0), gy=dest[1]+(r.goal==='home'?(r.jy||0):0);
@@ -3999,17 +4269,41 @@ function updateResidents(dt){ const tod=(typeof ENV!=='undefined')?ENV.t:0.4; co
       else if(r.goal==='leisure'){ r.act=r.leisureAct||'idle';
         if(r.act==='water'){ r.fishing=Math.random()<0.6; r.caught=undefined; r.caughtT=undefined;
           r.pause=(r.trait==='angler'?20:14)+Math.random()*22; }                 // sit 14-36s (anglers linger longer) — a real fishing session, not a blink
-        else { r.pause=3+Math.random()*4; }
-        r.pause0=r.pause; r.goal='home'; r.leisureSpot=null; }                  // arrived at the water/temple — pause there a while
-      else { r.act=Math.random()<0.4?'idle':'walk'; const pauseScale=r.trait==='brisk'?0.5:(r.trait==='chatty'?1.5:1);
+        else if(r.act==='gather'){ r.pause=(6+Math.random()*10)*T.social; }       // linger at the well/shrine steps and chat
+        else if(r.act==='play'){ r.pause=3+Math.random()*5; }                     // a child's burst of play
+        else { r.pause=3+Math.random()*4; }                                       // temple
+        r.pause0=r.pause; r.goal='home'; r.leisureSpot=null; }                  // arrived at the spot — pause there a while
+      else if(phase==='night'){ // deep night: most stay in; only idlers/drunks wander, and they linger
+        if((r.trait==='idler'||r.drunk) && Math.random()<0.5){ r.act='walk'; r.pause=1+Math.random()*2; r.jx=(Math.random()-0.5)*1.6; r.jy=(Math.random()-0.5)*1.6; }
+        else { r.act='idle'; r.pause=3+Math.random()*5; } }
+      else { r.act=Math.random()<0.4?'idle':'walk';
+        const pauseScale=(r.trait==='brisk'?0.5:(r.trait==='chatty'?1.5:1))*T.pause*(0.7+mood*0.5);
         r.pause=(0.6+Math.random()*1.2)*pauseScale; r.jx=(Math.random()-0.5)*1.2; r.jy=(Math.random()-0.5)*1.2;
-        const tookLeisure = dayTime && r.trait!=='brisk' && Math.random()<0.12 && (()=>{                 // a brief leisure detour before/instead of work or staying home
-          const wantTemple=r.trait==='devout'?((typeof S!=='undefined'&&S.era>=3)) : r.trait==='angler'? false :
-            (typeof S!=='undefined'&&S.era>=3)&&Math.random()<0.5;
-          const spot = wantTemple ? nearestTemple(r.home[0],r.home[1]) : nearestWaterEdge(r.home[0],r.home[1]);
-          if(!spot)return false; r.leisureSpot=spot; r.leisureAct=wantTemple?'temple':'water'; r.goal='leisure'; r.pause=0; return true; })();
-        if(!tookLeisure){ if(dayTime&&r.work)r.goal='out'; } }
-    } else { const v=r.spd*dt*(r.flee>0?2.3:1); moveClamp(r, r.x+dx/d*v, r.y+dy/d*v); r.ph+=dt*8; r.dir=dx-dy<0?-1:1; r.moving=true; r.act='walk'; } } }
+        if(isChild){
+          // children play near home rather than work; an excited dash toward a friendly yokai wins out
+          const yk=(phase!=='night')?nearbyFriendlyYokai(r.x,r.y):null;
+          if(yk){ r.leisureSpot=yk; r.leisureAct='play'; r.goal='leisure'; r.pause=0; r.excited=2.2; }
+          else if((phase==='day'||phase==='dawn'||phase==='dusk') && Math.random()<0.55){
+            const ox=clamp(Math.round(r.home[0]+(Math.random()-0.5)*5),0,W-1), oy=clamp(Math.round(r.home[1]+(Math.random()-0.5)*5),0,H-1);
+            if(!walkBlocked(ox,oy)){ r.leisureSpot=[ox,oy]; r.leisureAct='play'; r.goal='leisure'; r.pause=0; } }
+        } else {
+          // a stroll — appetite scales with trait, era mood, and land-value mood; only in daylight hours
+          const canLeisure=(phase==='day'||phase==='dawn') && r.trait!=='brisk';
+          const tookLeisure = canLeisure && Math.random() < 0.12*T.leisure*(0.5+mood) && (()=>{
+            let spot=null, actv=null;
+            if(r.trait==='chatty'){ spot=nearestGather(r.home[0],r.home[1]); actv='gather'; }
+            else if(r.trait==='angler'){ spot=nearestWaterEdge(r.home[0],r.home[1]); actv='water'; }
+            else if(r.trait==='devout'&&(typeof S!=='undefined'&&S.era>=3)){ spot=nearestTemple(r.home[0],r.home[1]); actv='temple'; }
+            else { const k=Math.random();
+              if(k<0.34&&(typeof S!=='undefined'&&S.era>=3)){ spot=nearestTemple(r.home[0],r.home[1]); actv='temple'; }
+              else if(k<0.67){ spot=nearestGather(r.home[0],r.home[1]); actv='gather'; }
+              else { spot=nearestWaterEdge(r.home[0],r.home[1]); actv='water'; } }
+            if(!spot)return false; r.leisureSpot=spot; r.leisureAct=actv; r.goal='leisure'; r.pause=0; return true; })();
+          if(!tookLeisure){ const working = dayTime || (phase==='dawn' && (r.trait==='angler'||r.trait==='brisk'||r.type==='farmer'));
+            if(working && r.work) r.goal='out'; } }
+      }
+    } else { const v=r.spd*dt*(r.flee>0?2.3:(r.excited>0?1.5:1))*T.speed*(0.82+(r.mood!==undefined?r.mood:0.6)*0.32);
+      moveClamp(r, r.x+dx/d*v, r.y+dy/d*v); r.ph+=dt*8; r.dir=dx-dy<0?-1:1; r.moving=true; r.act='walk'; } } }
 const apparitions=[]; let appTimer=8, disasterT=0, ryuCool=0;
 function tallest(){ let best=null; for(let y=0;y<H;y++)for(let x=0;x<W;x++){const c=grid[y][x]; if(c.dev>=2&&(!best||c.dev>best.dev))best={x,y,dev:c.dev};} return best; }
 function highHealth(){ if(!healthGrid)return null; for(let i=0;i<30;i++){const x=(Math.random()*W)|0,y=(Math.random()*H)|0; if(grid[y][x].dev>0&&healthGrid[y][x])return[x,y];} return null; }
@@ -4073,6 +4367,19 @@ function brutalityScale(){ const era=(typeof S!=='undefined')?S.era:3;
   if(era===6) return 1.2;           // Kamakura — hardening, the slide already underway
   if(era<=1) return 0.85;           // Jomon/Yayoi — primeval but not yet this violent
   return 1.0; }
+/* ===== COMBAT TEMPER — the brutality of an era expressed in CHOREOGRAPHY, not just particle
+   count. Sengoku fighters trade recklessly: they defend less (reactMul), recover faster
+   (recoverMul), and reach for the heavy cuts (heavyBias) — desperate slugging, not fencing.
+   Calmer eras fight more cautiously. One source so every reaction/recover/cut-pick reads era. ===== */
+function combatTemper(){ const era=(typeof S!=='undefined')?S.era:3;
+  if(era===7) return { reactMul:0.55, recoverMul:0.78, heavyBias:0.55 };   // Sengoku — frantic, almost no guard
+  if(era===6) return { reactMul:0.78, recoverMul:0.88, heavyBias:0.30 };   // Kamakura — already hardening
+  if(era<=1) return { reactMul:1.15, recoverMul:1.10, heavyBias:0.10 };    // primeval — clumsier, more wary
+  return { reactMul:1.0, recoverMul:1.0, heavyBias:0.20 }; }
+/* bias a cut pick toward the heavy (sweep/chop) end when the era runs hot */
+function pickCut(types,heavyBias){
+  if(Math.random()<heavyBias){ const heavy=types.filter(t=>t==='sweep'||t==='chop'); if(heavy.length) return heavy[(Math.random()*heavy.length)|0]; }
+  return types[(Math.random()*types.length)|0]; }
 function addClashSpark(x,y){ if(clashSparks.length>40)clashSparks.shift(); const bs=brutalityScale();
   for(let k=0;k<Math.round((5+((Math.random()*4)|0))*bs);k++){ const a=Math.random()*6.283, sp=(1.4+Math.random()*2.6)*bs;
     clashSparks.push({ x,y, h:3+Math.random()*2.5, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp*0.6, vh:4+Math.random()*4,
@@ -4143,6 +4450,9 @@ function landHit(e,m,tgt){
   addSpray(tgt.x,tgt.y,(isLast?12:7)+((Math.random()*6)|0), (isLast?1.5:1.0)+(m.swingType==='sweep'?0.5:m.swingType==='thrust'?0.3:0));
   if(isLast) addClashSpark(tgt.x,tgt.y);
   if(window.SoruBattleSFX) window.SoruBattleSFX.impact({weight:m.swingType, gain:isLast?1.3:1});
+  // HIT-STOP — a beat of frozen contact on the heavy/finishing blows reads as weight far more
+  // than extra blood does. Gated so ordinary cuts stay fluid and only the meaningful ones land hard.
+  e.hitStop=Math.max(e.hitStop||0, isLast?0.13 : (tgt.named?0.10 : (m.swingType==='sweep'||m.swingType==='thrust')?0.07:0));
   if(tgt.toughHits>0){ tgt.toughHits--; tgt.flinchT=0.3; tgt.recoilDX=(m.dir||1)*0.25; tgt.recoilDY=-0.08;
     if(typeof toast==='function') toast('⚔️ '+tgt.named+' staggers','the retainer takes the cut and stays on his feet');
     return; }
@@ -4164,7 +4474,9 @@ function landHitOnRonin(e,guard,ronin){ ronin.hp=(ronin.hp==null?1:ronin.hp)-1;
   addSpray(ronin.x,ronin.y,(isLastRonin?9:6)+((Math.random()*5)|0), (isLastRonin?1.3:0.9)+(guard.swingType==='sweep'?0.4:0));
   if(isLastRonin) addClashSpark(ronin.x,ronin.y);
   if(window.SoruBattleSFX) window.SoruBattleSFX.impact({weight:guard.swingType, gain:isLastRonin?1.3:1});
+  e.hitStop=Math.max(e.hitStop||0, isLastRonin?0.13 : (willDrop?0.08 : (guard.swingType==='sweep')?0.06:0));   // the reversal lands with the same weight
   if(willDrop){ ronin.state='down'; ronin.downT=0;
+    if(ronin._tracked!=null&&e.defenders&&e.defenders[ronin._tracked]){ e.defenders[ronin._tracked].engagedBy=Math.max(0,(e.defenders[ronin._tracked].engagedBy||0)-1); ronin._tracked=null; }
     addSpray(ronin.x,ronin.y,10+((Math.random()*6)|0),1.5); addStain(ronin.x,ronin.y,0.55+Math.random()*0.25);
     corpses.push({ x:ronin.x, y:ronin.y, t:0, life:26, lethal:true, skin:ronin.skin||'#d8ad82', col:ronin.col||'#2c2a30',
       obi:ronin.obi||'#3a2230', blood:1, parts:makeParts(ronin.x,ronin.y,ronin.skin||'#d8ad82',ronin.col||'#2c2a30'), vic:null, vicIsTraffic:false });
@@ -4177,25 +4489,34 @@ function landHitOnRonin(e,guard,ronin){ ronin.hp=(ronin.hp==null?1:ronin.hp)-1;
    Only runs for e.defenders that have .guard===true and only during 'duel' (the resistance-roll branch). */
 function guardCombatTick(e,d,dt,mob){
   if(d.state==='flee'){ const dx=d.x-e.rtx,dy=d.y-e.rty,dd=Math.hypot(dx,dy)||1; d.x+=dx/dd*1.8*dt; d.y+=dy/dd*1.8*dt; d.dir=dx<0?-1:1; return; }
+  if(d.temper===undefined) d.temper=Math.random();
+  if(d.standoff===undefined) d.standoff=0.3+Math.random()*0.6;
   if(d.blockT>0){ d.blockT-=dt; if(d.blockT<0)d.blockT=0; }
   if(d.dodgeT>0){ d.dodgeT-=dt; if(d.dodgeT<0)d.dodgeT=0; }
-  const kit=kitFor(d.weapon?d:{weapon:'bo'}), engage=kit.engage;                        // unarmed-looking guards still swing a bo by default
+  const kit=kitFor(d.weapon?d:{weapon:'bo'}), engage=kit.engage, ct=combatTemper();      // unarmed-looking guards still swing a bo by default
   if(d.wind>0){ d.wind-=dt; const tgt=mob[d.target]; if(tgt){ const dx=tgt.x-d.x; d.dir=dx<0?-1:1;
       // a defender watching an incoming cut gets one chance to brace or break away before it lands —
       // reacts partway through the ronin's windup, same generous timing as the mirrored check above
       if(!d.reacted && tgt.wind!=null && tgt.wind<=tgt.windMax*0.55 && tgt.swing<=0){ d.reacted=true;
         const r=Math.random(); if(r<0.30){ d.blockT=0.30; d.blockDir=d.dir; }
-        else if(r<0.46){ d.dodgeT=0.26; d.dodgeDX=(Math.random()<0.5?-1:1)*1.1; } } }
-    if(d.wind<=0){ d.wind=0; d.swing=d.swingMax; d.hitFired=false; d.reacted=false; if(window.SoruBattleSFX) window.SoruBattleSFX.swing({weight:d.swingType}); } return; }
+        else if(r<0.46){ d.dodgeT=0.26; d.dodgeDX=(Math.random()<0.5?-1:1)*1.1; } }
+      // SYMMETRY — the ronin under THIS guard's windup also gets to defend. Previously attackers
+      // just ate the counter, so a guard kill felt unearned; ronin are the better blades, so a
+      // touch higher block rate. Falls off in hot eras and for a desperate sole survivor.
+      if(!tgt.reacted && tgt.state!=='down' && tgt.state!=='flee' && !tgt.desperate && d.wind<=d.windMax*0.55){ tgt.reacted=true;
+        const rm=ct.reactMul*(0.8+(tgt.temper!=null?(1-tgt.temper):0.5)*0.6);
+        const r=Math.random(); if(r<0.26*rm){ tgt.blockT=0.30; tgt.blockDir=tgt.dir; } else if(r<0.44*rm){ tgt.dodgeT=0.26; tgt.dodgeDX=(Math.random()<0.5?-1:1)*1.1; } } }
+    if(d.wind<=0){ d.wind=0; d.swing=d.swingMax; d.hitFired=false; if(window.SoruBattleSFX) window.SoruBattleSFX.swing({weight:d.swingType}); } return; }
   if(d.swing>0){ d.swing-=dt; const tgt=mob[d.target];
     if(tgt){ const dx=tgt.x-d.x; d.dir=dx<0?-1:1;
       const elapsed=1-(d.swing/(d.swingMax||0.4)), cf=(d.swingType==='thrust')?0.5:(d.swingType==='sweep'?0.6:0.65);
-      if(!d.hitFired && elapsed>=cf){ d.hitFired=true;
+      if(!d.hitFired && elapsed>=cf){ d.hitFired=true; tgt.reacted=false;
         if(tgt.state==='down'||tgt.state==='flee'){ /* target already down or routed — clean whiff, no contact sound */ }
-        else if(tgt.blockT>0){ addClashSpark(d.x,d.y); if(window.SoruBattleSFX) window.SoruBattleSFX.parry({weight:d.swingType}); tgt.blockT=Math.max(0,tgt.blockT-0.08); }
+        else if(tgt.blockT>0){ addClashSpark(d.x,d.y); if(window.SoruBattleSFX) window.SoruBattleSFX.parry({weight:d.swingType}); tgt.blockT=Math.max(0,tgt.blockT-0.08);
+          if(Math.random()<0.34) tgt.riposte=true; }                                      // the ronin parries and snaps back a counter
         else if(tgt.dodgeT>0){ if(window.SoruBattleSFX) window.SoruBattleSFX.parry({weight:d.swingType,gain:0.5}); }
         else landHitOnRonin(e,d,tgt); } }
-    if(d.swing<=0){ d.swing=0; const rTab={thrust:0.16,diag:0.24,chop:0.30,sweep:0.34}; d.recover=(rTab[d.swingType]||0.24)*kit.swingMul+Math.random()*0.10; } return; }
+    if(d.swing<=0){ d.swing=0; const rTab={thrust:0.16,diag:0.24,chop:0.30,sweep:0.34}; d.recover=(rTab[d.swingType]||0.24)*kit.swingMul*ct.recoverMul+Math.random()*0.10; if(d.desperate)d.recover+=0.18; } return; }
   if(d.recover>0){ d.recover-=dt; if(d.recover<0)d.recover=0; return; }
   if(d.target==null || !mob[d.target] || mob[d.target].state==='down' || mob[d.target].state==='flee'){
     let best=-1,bd=1e9; for(let k=0;k<mob.length;k++){ const m=mob[k]; if(m.state==='down'||m.state==='flee')continue;
@@ -4203,10 +4524,16 @@ function guardCombatTick(e,d,dt,mob){
     d.target=best>=0?best:null; }
   if(d.target==null) return;
   const tgt=mob[d.target], dx=tgt.x-d.x,dy=tgt.y-d.y,dist=Math.hypot(dx,dy)||1;
+  const circW=(e.finalDuel?1.5:1)*(0.55+d.temper*0.5);
   if(dist>engage){ d.dir=dx<0?-1:1; d.circ=(d.circ||0)+dt*0.6;
-    moveClamp(d, d.x+dx/dist*1.5*dt+Math.cos(d.circ)*0.18*dt, d.y+dy/dist*1.5*dt+Math.sin(d.circ)*0.10*dt); }   // closing footwork drifts, not a straight beeline
-  else { d.dir=dx<0?-1:1; const types=kit.types; d.swingType=types[(Math.random()*types.length)|0];
-    d.wind=(0.16+Math.random()*0.10)*kit.windMul; d.windMax=d.wind; d.swingMax=((d.swingType==='thrust')?0.34:0.40)*kit.swingMul; } }
+    moveClamp(d, d.x+dx/dist*1.5*dt+Math.cos(d.circ)*0.18*circW*dt, d.y+dy/dist*1.5*dt+Math.sin(d.circ)*0.10*circW*dt); }   // closing footwork drifts, not a straight beeline
+  else if(d.standoff>0 && !d.desperate){ d.standoff-=dt; d.dir=dx<0?-1:1; d.circ=(d.circ||0)+dt*0.5;
+    moveClamp(d, d.x+Math.cos(d.circ)*0.14*circW*dt, d.y+Math.sin(d.circ)*0.08*circW*dt); }
+  else { d.dir=dx<0?-1:1; const types=kit.types; d.swingType=pickCut(types, ct.heavyBias + d.temper*0.2 + (d.desperate?0.4:0));
+    d.reacted=false;
+    const tf=(d.riposte?0.5:1)*(0.85+(1-d.temper)*0.4)*(d.desperate?0.7:1); d.riposte=false;
+    d.wind=(0.16+Math.random()*0.10)*kit.windMul*tf; d.windMax=d.wind; d.swingMax=((d.swingType==='thrust')?0.34:0.40)*kit.swingMul; }
+}
 
 /* ===== WEAPON KIT TABLE — reach/engage distance and the cut set each weapon draws from.
    Previously `weapon:'yari'|'katana'` only changed the idle pose; it never touched timing
@@ -4240,28 +4567,36 @@ function checkMorale(e,group,isRonin){
    The hit is timestamped to the swing itself (fires once, partway through the strike) — combat, not coincidence. */
 function roninCombatTick(e,m,dt,defenders,rtx,rty){
   if(m.state==='down') return;                                                          // dead weight — out of the fight
-  if(m.state==='flee'){ const dx=m.x-rtx,dy=m.y-rty,d=Math.hypot(dx,dy)||1; moveClamp(m, m.x+dx/d*m.spd*1.6*dt, m.y+dy/d*m.spd*1.6*dt); m.dir=dx<0?-1:1; m.ph+=dt*9; return; }
+  if(m.temper===undefined) m.temper=Math.random();                                      // 0=cautious circler … 1=reckless lunger
+  if(m.standoff===undefined) m.standoff=0.3+Math.random()*0.6;                          // a beat of sizing-up before the first cut
+  if(m.state==='flee'){ if(m._tracked!=null&&defenders[m._tracked]){defenders[m._tracked].engagedBy=Math.max(0,(defenders[m._tracked].engagedBy||0)-1);m._tracked=null;} const dx=m.x-rtx,dy=m.y-rty,d=Math.hypot(dx,dy)||1; moveClamp(m, m.x+dx/d*m.spd*1.6*dt, m.y+dy/d*m.spd*1.6*dt); m.dir=dx<0?-1:1; m.ph+=dt*9; return; }
   if(m.flinchT>0){ m.flinchT-=dt; if(m.flinchT<=0)m.flinchT=0; return; }                  // staggered by a counter-hit
   if(m.blockT>0){ m.blockT-=dt; if(m.blockT<0)m.blockT=0; }
   if(m.dodgeT>0){ m.dodgeT-=dt; if(m.dodgeT<0)m.dodgeT=0; }
-  const kit=kitFor(m), engage=kit.engage;
+  const kit=kitFor(m), engage=kit.engage, ct=combatTemper();
   if(m.wind>0){ m.wind-=dt; const tgt=defenders[m.target]; if(tgt){ const dx=tgt.x-m.x; m.dir=dx<0?-1:1;
       // the defender is watching THIS ronin's windup (the tell) — reacts partway through, leaving enough
-      // time for the block/dodge animation to actually establish before the cut lands at swing completion
-      if(!tgt.tellSeen && tgt.guard && tgt.state==='idle' && m.wind<=m.windMax*0.55){ tgt.tellSeen=true;
-        const r=Math.random(); if(r<0.22){ tgt.blockT=0.30; tgt.blockDir=tgt.dir; } else if(r<0.36){ tgt.dodgeT=0.26; tgt.dodgeDX=(Math.random()<0.5?-1:1)*1.1; } } }
+      // time for the block/dodge animation to actually establish before the cut lands at swing completion.
+      // Reaction rate falls in hot eras (less guarded trading) and rises for a cautious defender; a
+      // desperate sole survivor doesn't defend at all — it's all offence in the last stand.
+      if(!tgt.tellSeen && tgt.guard && tgt.state==='idle' && !tgt.desperate && m.wind<=m.windMax*0.55){ tgt.tellSeen=true;
+        const rm=ct.reactMul*(0.7+(tgt.temper!=null?(1-tgt.temper):0.5)*0.6);
+        const r=Math.random(); if(r<0.22*rm){ tgt.blockT=0.30; tgt.blockDir=tgt.dir; } else if(r<0.36*rm){ tgt.dodgeT=0.26; tgt.dodgeDX=(Math.random()<0.5?-1:1)*1.1; } } }
     if(m.wind<=0){ m.wind=0; m.swing=m.swingMax; m.hitFired=false; if(window.SoruBattleSFX) window.SoruBattleSFX.swing({weight:m.swingType}); } return; }
   if(m.swing>0){ m.swing-=dt; const tgt=defenders[m.target];
     if(tgt){ const dx=tgt.x-m.x; m.dir=dx<0?-1:1;
       const elapsed=1-(m.swing/(m.swingMax||0.4)), cf=(m.swingType==='thrust')?0.5:(m.swingType==='sweep'?0.6:0.65);
       if(!m.hitFired && elapsed>=cf){ m.hitFired=true;
         if(tgt.state!=='idle'){ /* already down or struck — no hit */ }
-        else if(tgt.blockT>0){ addClashSpark(m.x,m.y); if(window.SoruBattleSFX) window.SoruBattleSFX.parry({weight:m.swingType}); tgt.blockT=Math.max(0,tgt.blockT-0.08); }
+        else if(tgt.blockT>0){ addClashSpark(m.x,m.y); if(window.SoruBattleSFX) window.SoruBattleSFX.parry({weight:m.swingType}); tgt.blockT=Math.max(0,tgt.blockT-0.08);
+          if(tgt.guard && Math.random()<0.30) tgt.riposte=true; }                        // a clean parry opens the door to a counter
         else if(tgt.dodgeT>0){ if(window.SoruBattleSFX) window.SoruBattleSFX.parry({weight:m.swingType,gain:0.5}); }
         else landHit(e,m,tgt); } }
-    if(m.swing<=0){ m.swing=0; const rTab={thrust:0.16,diag:0.24,chop:0.30,sweep:0.34}; m.recover=(rTab[m.swingType]||0.24)*kit.swingMul+Math.random()*0.10; } return; }
+    if(m.swing<=0){ m.swing=0; const rTab={thrust:0.16,diag:0.24,chop:0.30,sweep:0.34}; m.recover=(rTab[m.swingType]||0.24)*kit.swingMul*ct.recoverMul+Math.random()*0.10; if(m.desperate)m.recover+=0.18; } return; }   // wild swings leave you open
   if(m.recover>0){ m.recover-=dt; if(m.recover<0)m.recover=0; return; }
   if(m.target==null || !defenders[m.target] || defenders[m.target].state!=='idle'){
+    // release the old target's engagement count before re-acquiring, so flanking bias stays honest
+    if(m._tracked!=null&&defenders[m._tracked]){ defenders[m._tracked].engagedBy=Math.max(0,(defenders[m._tracked].engagedBy||0)-1); m._tracked=null; }
     // FLANKING: prefer a defender someone else in the warband is ALREADY engaged with over the
     // nearest free one — ganging up reads as a real attack, not four duels happening to overlap.
     // Falls back to nearest-free when nobody's engaged yet (opening seconds of the fight).
@@ -4274,10 +4609,15 @@ function roninCombatTick(e,m,dt,defenders,rtx,rty){
     if(m.target!=null){ const t=defenders[m.target]; t.engagedBy=(t.engagedBy||0)+1; m._tracked=m.target; } }
   if(m.target==null){ const dx=rtx-m.x,dy=rty-m.y,d=Math.hypot(dx,dy)||1; m.dir=dx<0?-1:1; return; }   // no one left standing — wait for destruct
   const tgt=defenders[m.target], dx=tgt.x-m.x,dy=tgt.y-m.y,d=Math.hypot(dx,dy)||1;
+  const circW=(e.finalDuel?1.5:1)*(0.55+m.temper*0.5);                                   // cautious + final duel = wider, slower circling
   if(d>engage){ m.circ=(m.circ||Math.random()*6.28)+dt*0.7; m.dir=dx<0?-1:1; m.ph+=dt*9;
-    moveClamp(m, m.x+dx/d*m.spd*1.25*dt+Math.cos(m.circ)*0.2*dt, m.y+dy/d*m.spd*1.25*dt+Math.sin(m.circ)*0.11*dt); }          // close the gap, with live footwork drift
-  else { m.dir=dx<0?-1:1; const types=kit.types; m.swingType=types[(Math.random()*types.length)|0];   // varied cuts, no repeating arc — pool drawn from the weapon kit
-    m.wind=(0.14+Math.random()*0.10)*kit.windMul; m.windMax=m.wind; m.swingMax=((m.swingType==='thrust')?0.34:(m.swingType==='sweep'?0.42:0.40))*kit.swingMul; tgt.tellSeen=false; } }
+    moveClamp(m, m.x+dx/d*m.spd*1.25*dt+Math.cos(m.circ)*0.2*circW*dt, m.y+dy/d*m.spd*1.25*dt+Math.sin(m.circ)*0.11*circW*dt); }          // close the gap, with live footwork drift
+  else if(m.standoff>0 && !m.desperate){ m.standoff-=dt; m.dir=dx<0?-1:1; m.circ=(m.circ||0)+dt*0.5; m.ph+=dt*4;   // at range, sizing each other up — the held breath before the first blade
+    moveClamp(m, m.x+Math.cos(m.circ)*0.16*circW*dt, m.y+Math.sin(m.circ)*0.09*circW*dt); }
+  else { m.dir=dx<0?-1:1; const types=kit.types; m.reacted=false;
+    m.swingType=pickCut(types, ct.heavyBias + m.temper*0.2 + (m.desperate?0.4:0));       // hot eras / reckless fighters reach for the heavy cuts
+    const tf=(m.riposte?0.5:1)*(0.85+(1-m.temper)*0.4)*(m.desperate?0.7:1); m.riposte=false;   // riposte & aggression shorten the windup
+    m.wind=(0.14+Math.random()*0.10)*kit.windMul*tf; m.windMax=m.wind; m.swingMax=((m.swingType==='thrust')?0.34:(m.swingType==='sweep'?0.42:0.40))*kit.swingMul; tgt.tellSeen=false; } }
 
 /* staged raid driver — approach → [duel?] → assault → destruct → collapse → aftermath → disperse.
    The building consequence (applyRaid) is DEFERRED all the way to 'collapse', and is SKIPPED
@@ -4288,7 +4628,8 @@ function updateRaid(e,dt,near){ e.st+=dt; const arson=e.raidAction==='arson'; co
       if(near){ e.st=0; e.struck=0; e.dmg=0; e.ronDown=0;
         const nDef=2+((Math.random()*2)|0);
         e.defenders=spawnDefenders(e.rtx,e.rty,nDef);
-        for(const m of e.mob){ m.target=null; m.wind=0; m.swing=0; m.recover=0; m.hitFired=false; m.state=null; m.hp=1; m.flinchT=0; }
+        for(const m of e.mob){ m.target=null; m.wind=0; m.swing=0; m.recover=0; m.hitFired=false; m.state=null; m.hp=1; m.flinchT=0; m.standoff=0.3+Math.random()*0.6; m.reacted=false; m.riposte=false; m.desperate=false; if(m.temper===undefined)m.temper=Math.random(); }
+        e.hitStop=0; e.finalDuel=false;
         if(typeof scatterWitnesses==='function') scatterWitnesses(e.rtx,e.rty);
         // ===== RESISTANCE ROLL — 40-60% chance the household has armed retainers/guards waiting =====
         const resisted=Math.random()<(0.40+Math.random()*0.20);
@@ -4311,8 +4652,19 @@ function updateRaid(e,dt,near){ e.st+=dt; const arson=e.raidAction==='arson'; co
       else if(e.t>(e.approachBudget||12)) e.state='gone';
       break;
     case 'duel': {                                          // a real two-sided skirmish — either side can break first
-      for(const m of e.mob) roninCombatTick(e,m,dt,e.defenders,e.rtx,e.rty);
-      for(const d of e.defenders) if(d.guard && d.state==='idle') guardCombatTick(e,d,dt,e.mob);
+      // HIT-STOP & FINAL-EXCHANGE CADENCE — freeze the fight for a beat after a heavy blow,
+      // and slow it down to a held, deliberate tempo once it's narrowed to the last one-on-one.
+      if(e.hitStop>0){ e.hitStop-=dt; if(e.hitStop<0)e.hitStop=0; }
+      const ronStand=e.mob.filter(m=>m.state!=='down'&&m.state!=='flee').length;
+      const defStand=e.defenders.filter(d=>d.state==='idle').length;
+      e.finalDuel=(ronStand===1 && defStand===1);
+      // DESPERATION — the sole survivor of a side, still outnumbered, fights wild and over-committed
+      // for a beat rather than cleanly flipping to flee. A frantic last stand before the rout.
+      for(const m of e.mob){ m.desperate=(m.state!=='down'&&m.state!=='flee'&&ronStand===1&&defStand>=2); }
+      for(const d of e.defenders){ d.desperate=(d.guard&&d.state==='idle'&&defStand===1&&ronStand>=2); }
+      let cdt=e.hitStop>0?dt*0.05:dt; if(e.finalDuel) cdt*=0.72;
+      for(const m of e.mob) roninCombatTick(e,m,cdt,e.defenders,e.rtx,e.rty);
+      for(const d of e.defenders) if(d.guard && d.state==='idle') guardCombatTick(e,d,cdt,e.mob);
       // ambient blade-on-blade texture while both sides still have fighters swinging —
       // sparse and probabilistic so it reads as "a fight is happening nearby", not a metronome
       if(window.SoruBattleSFX){
@@ -4322,7 +4674,7 @@ function updateRaid(e,dt,near){ e.st+=dt; const arson=e.raidAction==='arson'; co
         if(concurrent>0 && Math.random()<dt*1.1*concurrent) window.SoruBattleSFX.clash();
       }
       // tend struck defenders the same way the plain assault does (struck → down after 0.4s)
-      for(const d of e.defenders){ if(d.state==='struck'){ d.t=(d.t||0)+dt; if(d.t>0.4){ raidKill(e,d.x,d.y); d.state='down'; } } }
+      for(const d of e.defenders){ if(d.state==='struck'){ d.t=(d.t||0)+cdt; if(d.t>0.4){ raidKill(e,d.x,d.y); d.state='down'; } } }
       // MORALE — a side down to a remnant breaks and runs rather than fighting to the last man.
       // Ronin who flee are removed from targeting (handled inside both *CombatTick functions via
       // state==='flee' checks) but stay in e.mob so disperse/cleanup logic still sees them.
@@ -4357,7 +4709,8 @@ function updateRaid(e,dt,near){ e.st+=dt; const arson=e.raidAction==='arson'; co
       break;
     case 'assault':                                       // a real duel: ronin close on defenders and cut them down one at a time
       updateDefenders(e,dt);
-      for(const m of e.mob) roninCombatTick(e,m,dt,e.defenders,e.rtx,e.rty);
+      if(e.hitStop>0){ e.hitStop-=dt; if(e.hitStop<0)e.hitStop=0; }
+      { const adt=e.hitStop>0?dt*0.05:dt; for(const m of e.mob) roninCombatTick(e,m,adt,e.defenders,e.rtx,e.rty); }
       e.dmg=Math.min(0.3,e.dmg+dt*0.05);
       { const anyLeft=e.defenders.some(d=>d.state!=='down');
         if(e.st>7.5 || (!anyLeft && e.st>1.4)){ e.state='destruct'; e.st=0;
@@ -4659,21 +5012,57 @@ function drawCorpse(g,cx,cy,z,c){ const fade=Math.max(0,Math.min(1,(c.life-c.t)/
   }
   g.globalAlpha=1; }
 
-const CUTS={ chop:{py:-7.4, a0:-2.2,  a1:0.55, len:12,   blurW:1.5},
-             diag:{py:-8.1, a0:-1.65, a1:1.3,  len:12.5, blurW:1.4},
-             sweep:{py:-6.0,a0:0.2,   a1:-3.0, len:13.5, blurW:1.8} };
+/* Blade lengths brought down to roughly a real katana's reach relative to the figure (~7z, not
+   the old 12-13z that read as a spinning propeller). Arc spans tightened so a cut is a decisive
+   stroke, not a 150°+ windmill, and blurW thinned so the motion smear is a trailing flick at the
+   tip rather than a grey halo swept across the whole arc. */
+const CUTS={ chop:{py:-7.4, a0:-1.55, a1:0.45, len:7.0, blurW:0.9},
+             diag:{py:-8.1, a0:-1.25, a1:0.95, len:7.2, blurW:0.85},
+             sweep:{py:-6.0,a0:0.05,  a1:-1.9, len:7.4, blurW:1.0} };
 
-function drawRonin(g,cx,cy,z,a,dir){ dir=dir||1; z=z*(a.build||1); const ph=a.ph||0, sw=Math.sin(ph), bob=Math.abs(Math.sin(ph))*0.7*z;
+/* ---- two-handed grip: sleeves from both shoulders converging on the hilt, plus the hands
+   themselves. Without this the blade floated out of the chest with no arm — the single biggest
+   "silly" tell. Drawn under the weapon (hands grip, blade reads in front) but over the torso. ---- */
+function drawSwordArms(g,z,bob,robe,skin,dir,hgx,hgy){
+  const nearSh=[1.4*dir*z,-6.5*z-bob], farSh=[-1.5*dir*z,-6.6*z-bob];
+  g.lineCap='round';
+  g.strokeStyle=shade(robe,-24); g.lineWidth=1.5*z;                                   // far (off-hand) sleeve, under
+  g.beginPath();g.moveTo(farSh[0],farSh[1]);
+    g.quadraticCurveTo((farSh[0]+hgx)*0.5,(farSh[1]+hgy)*0.5-0.5*z,hgx-0.6*dir*z,hgy);g.stroke();
+  g.strokeStyle=shade(robe,-4); g.lineWidth=1.7*z;                                     // near (lead) sleeve, over
+  g.beginPath();g.moveTo(nearSh[0],nearSh[1]);
+    g.quadraticCurveTo((nearSh[0]+hgx)*0.5,(nearSh[1]+hgy)*0.5-0.3*z,hgx,hgy);g.stroke();
+  g.fillStyle=shade(skin,-6); g.beginPath();g.arc(hgx-0.5*dir*z,hgy,0.6*z,0,7);g.fill();   // off hand
+  g.fillStyle=skin;          g.beginPath();g.arc(hgx,hgy,0.65*z,0,7);g.fill();             // lead hand on the tsuka
+  g.lineCap='butt';
+}
+
+/* ===== BLADE INK-TRAIL — a tapered sumi-e brushstroke chasing the blade tip through the cut.
+   The existing white crescent is the steel catching moonlight; THIS is the ink afterimage that
+   makes a cut read as one deliberate stroke rather than poses snapping between frames. Samples
+   are body-local tip positions accumulated over the swing (a._trail), darkest/widest at the
+   leading edge and fading to nothing at the tail — a brush lifting off the paper. ===== */
+function inkTrailStroke(g,trail,z){ if(!trail||trail.length<2)return;
+  g.save(); g.lineCap='round'; g.lineJoin='round'; const n=trail.length;
+  for(let i=1;i<n;i++){ const a0=trail[i-1],a1=trail[i], f=i/(n-1);          // f→1 at the newest (leading) sample
+    g.strokeStyle='rgba(22,18,16,'+(0.06+0.34*f)+')';                        // ink: faint tail, fuller belly near the tip
+    g.lineWidth=(0.4+2.8*f)*z;
+    g.beginPath(); g.moveTo(a0.x,a0.y); g.lineTo(a1.x,a1.y); g.stroke(); }
+  g.restore(); }
+function drawRonin(g,cx,cy,z,a,dir){ dir=dir||1; z=z*(a.build||1); const ph=a.ph||0, sw=Math.sin(ph);
+  const fighting=(a.wind>0||a.swing>0||a.recover>0||a.flinchT>0||a.blockT>0||a.dodgeT>0);   // planted while trading blows — the walk-bob bouncing mid-cut read as goofy
+  if(!(a.swing>0)) a._trail=null;                                            // trail lives only for the duration of a single cut
+  const bob=fighting?0:Math.abs(Math.sin(ph))*0.7*z;
   const robe=a.col||'#2c2a30', skin=a.skin||'#d8ad82', hs=a.hairSeed||0;
   /* ---- weight shift / footwork: the WHOLE body leans back on the windup, then drives forward
      into the cut — real stance mechanics, not just an arm swinging in place. ---- */
   let lunge=0, leanAng=0;
   if(a.dodgeT>0){ const p=a.dodgeT/0.24; lunge+=(a.dodgeDX||1)*1.6*p; leanAng+=0.08*Math.sign(a.dodgeDX||1)*p; }   // snapping out of a cut's path
   if(a.blockT>0){ leanAng+=-0.06*dir; }                                                                          // braced low behind the blade
-  if(a.wind>0){ const p=1-(a.wind/(a.windMax||0.2)); lunge+=-1.3*p*dir; leanAng+=-0.10*dir*p; }
+  if(a.wind>0){ const p=1-(a.wind/(a.windMax||0.2)); lunge+=-0.8*p*dir; leanAng+=-0.10*dir*p; }
   else if(a.swing>0){ const p=1-(a.swing/(a.swingMax||0.4));
-    const Ltab={chop:1.7,diag:2.0,sweep:1.4,thrust:3.6}; const L=Ltab[a.swingType]||1.7;
-    const fp=Math.sin(Math.min(1,p*1.25)*Math.PI); lunge+=L*fp*dir; leanAng+=0.12*dir*fp; }
+    const Ltab={chop:0.9,diag:1.0,sweep:0.8,thrust:2.0}; const L=(Ltab[a.swingType]||0.9)*(a.desperate?1.55:1);   // a desperate last stand over-commits — wild, off-balance reach
+    const fp=Math.sin(Math.min(1,p*1.25)*Math.PI); lunge+=L*fp*dir; leanAng+=0.12*dir*fp*(a.desperate?1.4:1); }
   g.save(); g.translate(cx+lunge*z,cy); g.rotate(leanAng); cx=0; cy=0;
   const fL=cx+(-1.7+sw*0.8)*z, fR=cx+(0.3-sw*0.8)*z, fy=cy+1.4*z;                                                                      // foot anchors, reused below for zori straps
   g.fillStyle='#211b17'; g.fillRect(fL,fy,1.4*z,1.5*z); g.fillRect(fR,fy,1.4*z,1.5*z);                                                 // feet
@@ -4755,6 +5144,18 @@ function drawRonin(g,cx,cy,z,a,dir){ dir=dir||1; z=z*(a.build||1); const ph=a.ph
     g.beginPath();g.arc(hcx-0.8*z,hcy-0.15*z,0.22*z,0,7);g.fill();g.beginPath();g.arc(hcx+0.8*z,hcy-0.15*z,0.22*z,0,7);g.fill(); g.restore();
   }
   const bx=cx+(2.4*dir)*z, by=cy-5.4*z-bob;                                                                                            // drawn katana
+  // ---- grip point per phase, so the arms below reach the actual hilt rather than floating ----
+  let hgx,hgy;
+  if(a.wind>0){
+    if(a.swingType==='thrust'){ hgx=(-0.2*dir)*z; hgy=cy-5.8*z-bob; }
+    else if(a.swingType==='sweep'){ hgx=(0.9*dir)*z; hgy=cy-5.1*z-bob; }
+    else { hgx=(0.55*dir)*z; hgy=cy-7.0*z-bob; }                                          // overhead cocked — hands at the low end of the haft
+  } else if(a.swing>0){
+    if(a.swingType==='thrust'){ hgx=(1.3*dir)*z; hgy=cy-6.6*z-bob; }
+    else { const cut=CUTS[a.swingType]||CUTS.chop; hgx=(0.25*dir)*z; hgy=cy+cut.py*z-bob; }   // hands ride the arc pivot
+  } else if(a.weapon==='yari'){ hgx=(1.4*dir)*z; hgy=cy-4.4*z-bob; }
+  else { hgx=(1.45*dir)*z; hgy=cy-4.9*z-bob; }                                            // resting grip
+  if(!(a.weapon==='yari'&&!a.wind&&!a.swing)) drawSwordArms(g,z,bob,robe,skin,dir,hgx,hgy);   // yari idle keeps its over-shoulder carry below
   if(a.wind>0){                                                                          // ready stance — blade cocked for the coming cut
     g.strokeStyle='#2a2622'; g.lineWidth=0.7*z;
     if(a.swingType==='thrust'){ const hx=cx+(-2.2*dir)*z, hy=cy-6*z-bob;                 // drawn back at the hip, point trailing
@@ -4788,12 +5189,14 @@ function drawRonin(g,cx,cy,z,a,dir){ dir=dir||1; z=z*(a.build||1); const ph=a.ph
   g.save(); g.translate(bx,by); g.rotate(dir>0?-0.5:Math.PI+0.5);
     g.fillStyle='#c9a24a'; g.fillRect(-0.5*z,-0.6*z,1.4*z,1.2*z);                                                                      // tsuba
     g.strokeStyle='#1e1b18'; g.lineWidth=0.8*z; g.beginPath();g.moveTo(-2.2*z,0);g.lineTo(0,0);g.stroke();                            // grip
-    const bl=g.createLinearGradient(0,-0.4*z,9*z,0); bl.addColorStop(0,'#e8eef0'); bl.addColorStop(1,'#aeb8bd');
-    g.fillStyle=bl; g.beginPath();g.moveTo(1*z,-0.55*z);g.lineTo(9*z,-0.35*z);g.lineTo(9.4*z,0);g.lineTo(9*z,0.2*z);g.lineTo(1*z,0.4*z);g.closePath();g.fill();
-    g.strokeStyle='rgba(255,255,255,0.6)'; g.lineWidth=0.18*z; g.beginPath();g.moveTo(1.4*z,-0.3*z);g.lineTo(8.8*z,-0.15*z);g.stroke();
+    const bl=g.createLinearGradient(0,-0.4*z,6.5*z,0); bl.addColorStop(0,'#e8eef0'); bl.addColorStop(1,'#aeb8bd');
+    g.fillStyle=bl; g.beginPath();g.moveTo(1*z,-0.5*z);g.lineTo(6.5*z,-0.32*z);g.lineTo(6.9*z,0);g.lineTo(6.5*z,0.2*z);g.lineTo(1*z,0.38*z);g.closePath();g.fill();
+    g.strokeStyle='rgba(255,255,255,0.6)'; g.lineWidth=0.18*z; g.beginPath();g.moveTo(1.4*z,-0.28*z);g.lineTo(6.3*z,-0.13*z);g.stroke();
   g.restore();
   } else if(a.swingType==='thrust'){                                                     // mid-swing: linear lunging thrust
-    const p=1-a.swing/(a.swingMax||0.4), ext=Math.sin(Math.min(1,p*1.2)*Math.PI)*11, sy=cy-6.6*z-bob;
+    const p=1-a.swing/(a.swingMax||0.4), ext=Math.sin(Math.min(1,p*1.2)*Math.PI)*7, sy=cy-6.6*z-bob;
+    if(!a._trail)a._trail=[]; a._trail.push({x:cx+(1.5*dir+ext*dir)*z,y:sy}); if(a._trail.length>6)a._trail.shift();
+    inkTrailStroke(g,a._trail,z);
     g.save(); g.globalCompositeOperation='lighter'; g.strokeStyle='rgba(255,250,235,'+(0.4*(1-p))+')'; g.lineWidth=1.2*z;
     g.beginPath(); g.moveTo(cx+(1.5*dir)*z,sy); g.lineTo(cx+(1.5*dir+ext*0.8*dir)*z,sy); g.stroke(); g.restore();
     g.save(); g.translate(cx+(1.5*dir)*z,sy); g.rotate(dir>0?0:Math.PI);
@@ -4806,8 +5209,11 @@ function drawRonin(g,cx,cy,z,a,dir){ dir=dir||1; z=z*(a.build||1); const ph=a.ph
   } else {                                                                                // mid-swing: chop / diag / sweep — each its own arc + anchor height
     const cut=CUTS[a.swingType]||CUTS.chop;
     const p=1-a.swing/(a.swingMax||0.4), a0=cut.a0*dir, a1=cut.a1*dir, ang=a0+(a1-a0)*p, hcx2=cx, hcy2=cy+cut.py*z-bob;
+    const sgn=Math.sign(a1-a0)||1, ts=(sgn>0)?Math.max(a0,ang-0.55):Math.min(a0,ang+0.55), ccw=(a1<a0);   // short trailing smear, not the whole arc
+    if(!a._trail)a._trail=[]; a._trail.push({x:hcx2+Math.cos(ang)*cut.len*z,y:hcy2+Math.sin(ang)*cut.len*z}); if(a._trail.length>7)a._trail.shift();
+    inkTrailStroke(g,a._trail,z);
     g.save(); g.globalCompositeOperation='lighter'; g.strokeStyle='rgba(255,250,235,'+(0.45*(1-p))+')'; g.lineWidth=cut.blurW*z;   // motion-blur crescent
-    g.beginPath(); g.arc(hcx2,hcy2,cut.len*0.85*z,a0,ang,dir<0); g.stroke(); g.restore();
+    g.beginPath(); g.arc(hcx2,hcy2,cut.len*0.8*z,ts,ang,ccw); g.stroke(); g.restore();
     g.save(); g.translate(hcx2,hcy2); g.rotate(ang);
       const bl2=g.createLinearGradient(0,0,cut.len*z,0); bl2.addColorStop(0,'#e8eef0'); bl2.addColorStop(1,'#aeb8bd');
       g.fillStyle=bl2; g.beginPath();g.moveTo(2*z,-0.6*z);g.lineTo(cut.len*z,-0.32*z);g.lineTo((cut.len+0.6)*z,0);g.lineTo(cut.len*z,0.32*z);g.lineTo(2*z,0.6*z);g.closePath();g.fill();
@@ -4942,6 +5348,15 @@ function drawDefender(g,cx,cy,z,d){
 function drawGuardWeapon(g,cx,cy,z,d,dir){
   const sickle=(d.kit&&d.kit.type==='farmer');
   const bx=cx+(2.1*dir)*z, by=cy-5.2*z;
+  // ---- lead arm reaching to the haft so the weapon is gripped, not floating off the chest ----
+  let ggx,ggy;
+  if(d.wind>0){ if(d.swingType==='thrust'){ ggx=cx+(0.6*dir)*z; ggy=cy-5.2*z; } else { ggx=cx+(0.5*dir)*z; ggy=cy-6.8*z; } }
+  else if(d.swing>0){ ggx=cx+(1.2*dir)*z; ggy=cy-5.4*z; }
+  else { ggx=cx+(1.25*dir)*z; ggy=cy-4.5*z; }
+  { const rk=(d.kit&&d.kit.robe)||'#6b5a44';                                            // arm reads as the same garment as the kit when available
+    g.lineCap='round'; g.strokeStyle=shade(rk,-10); g.lineWidth=1.4*z;
+    g.beginPath();g.moveTo(cx+(1.2*dir)*z,cy-6.4*z);g.quadraticCurveTo((cx+(1.2*dir)*z+ggx)*0.5,(cy-6.4*z+ggy)*0.5-0.3*z,ggx,ggy);g.stroke();
+    g.fillStyle='#caa57a'; g.beginPath();g.arc(ggx,ggy,0.55*z,0,7);g.fill(); g.lineCap='butt'; }
   if(d.wind>0){                                                                         // ready stance — weapon cocked for the coming cut
     g.strokeStyle='#3a2c1c'; g.lineWidth=0.65*z;
     if(d.swingType==='thrust'){ const hx=cx+(-1.9*dir)*z, hy=cy-5.8*z;
@@ -4992,6 +5407,14 @@ function drawViolenceFX(ctx,z){
   for(const d of debris){ const[cx,cy]=s2(d.x,d.y); if(cx<-90||cx>VW+90||cy<-90||cy>VH+90)continue; drawDebris(ctx,cx,cy,z,d); }
   for(const p of sprays){ const[cx,cy]=s2(p.x,p.y); if(cx<-90||cx>VW+90||cy<-90||cy>VH+90)continue; drawSpray(ctx,cx,cy,z,p); }
   for(const p of clashSparks){ const[cx,cy]=s2(p.x,p.y); if(cx<-90||cx>VW+90||cy<-90||cy>VH+90)continue; drawClashSpark(ctx,cx,cy,z,p); }
+  // FINAL-EXCHANGE FOCUS — when a skirmish narrows to the last one-on-one, a soft vignette pulls
+  // the eye to it. Ramps in/out via e._focus so it breathes rather than snapping on. The duel is
+  // already slowed (cdt) in updateRaid; this is the visual half of giving the last cut its weight.
+  for(const e of encounters){ const want=e.finalDuel?1:0; e._focus=(e._focus||0)+(want-(e._focus||0))*0.08;
+    if(e._focus>0.02){ const[cx,cy]=s2(e.rtx,e.rty); if(cx>-200&&cx<VW+200&&cy>-200&&cy<VH+200){
+      const R=Math.max(VW,VH)*1.05, vg=ctx.createRadialGradient(cx,cy-30*z,40*z,cx,cy-30*z,R);
+      vg.addColorStop(0,'rgba(8,6,10,0)'); vg.addColorStop(0.42,'rgba(8,6,10,0)'); vg.addColorStop(1,'rgba(6,4,10,'+(0.5*e._focus).toFixed(3)+')');
+      ctx.save(); ctx.fillStyle=vg; ctx.fillRect(0,0,VW,VH); ctx.restore(); } } }
   for(const e of encounters){ if(e.state==='approach'||e.state==='chase'){ const v=e.vic, vx=v.wx!=null?v.wx:v.x, vy=v.wy!=null?v.wy:v.y; const[cx,cy]=s2(vx,vy);
     ctx.save(); ctx.globalAlpha=0.85; ctx.fillStyle='#b3261e'; ctx.font='700 '+Math.max(8,(8*z)|0)+'px serif'; ctx.textAlign='center'; ctx.fillText('!',cx,cy-15*z); ctx.restore(); } } }
 /* ========================== END RONIN STREET VIOLENCE ========================== */
@@ -6226,9 +6649,16 @@ setTimeout(()=>{resize();fit();},120); setTimeout(()=>{resize();fit();},500);
     }
     if (a.nerve !== undefined) return a.respectful ? 'curious' : 'worried';
     if (a.watch > 0) return 'curious';
+    if (a.greet > 0) return Math.random()<0.5 ? 'social' : 'happy';
+    if (a.act==='play') return Math.random()<0.6 ? 'laugh' : 'happy';
+    if (a.act==='gather') return 'social';
     if (a.act==='temple' || a.act==='water') return Math.random()<0.5 ? 'idle' : 'curious';
-    if (a.pause>0 && Math.random()<0.4) return 'social';
-    if (Math.random()<0.06) return 'happy';
+    // collective era mood and personal land-value mood tint the ambient chatter
+    var T = (typeof eraTemperament==='function') ? eraTemperament() : null;
+    if (T && T.tense>0 && Math.random() < T.tense*0.4) return 'worried';
+    if (a.mood!==undefined && a.mood<0.3 && Math.random()<0.3) return 'sad';
+    if (a.pause>0 && Math.random() < 0.4*(T?T.social:1)) return 'social';
+    if (Math.random() < 0.06*(T?T.social:1)) return 'happy';
     if (Math.random()<0.04) return 'sad';
     return 'idle';
   }
