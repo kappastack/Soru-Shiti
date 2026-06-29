@@ -821,7 +821,7 @@ let PAPERPAT=null, GRAINPAT2=null;
    (fire, zone tints, service coverage) always survive the wash. Arc: serene -> golden Heian ->
    greyed Kamakura -> ash Sengoku (rock bottom) -> teal/neon Quantum rebirth. */
 const AGEPAL=[
- /*0 JOMON   */ {grass:'#7d8466',forest:'#3f5236',ground:'#8a7d5e',water:'#3a5566',sand:'#7d7256',tree:'#3a4a2c', wet:1.00,dry:0.00},   // sand DARKENED from #c4b083 — that value blended into the SAND tile palette and, after inkize's contrast push, still read near-white at the coastline even with the tile's own base/lt/dk darkened
+ /*0 JOMON   */ {grass:'#7d9b4d',forest:'#5a7d3e',ground:'#9a8f5a',water:'#3a5566',sand:'#bfb184',tree:'#3f5c2e', wet:1.00,dry:0.00},   // GREEN ISLAND base — natural Japanese greens (若草 young grass, 杉 cedar), shared by every age
  /*1 YAYOI   */ {grass:'#869058',forest:'#4a5a38',ground:'#9a8a5e',water:'#5a8088',sand:'#cdbc96',tree:'#46583a', wet:1.00,dry:0.00},
  /*2 KOFUN   */ {grass:'#869150',forest:'#48592f',ground:'#9c8458',water:'#4f7283',sand:'#c9b58c',tree:'#445428', wet:0.85,dry:0.00},
  /*3 ASUKA   */ {grass:'#7f9050',forest:'#46592f',ground:'#9c875c',water:'#4e7686',sand:'#cab98e',tree:'#42542a', wet:0.80,dry:0.00},
@@ -839,7 +839,13 @@ function agePal(){ return AGEPAL[Math.min(S.era|0,AGEPAL.length-1)]; }
    Water (its own spirit-water/frozen pipeline) and the icy void-rim (its own gradient pipeline)
    never call inkize either, so they stay coloured. */
 function inkize(hex){
-  if(!VOID||!hex||hex[0]!=='#'||hex.length<7) return hex;
+  // GREEN ISLAND: the old behaviour collapsed every terrain colour to neutral grey in VOID.
+  // The island is now painted in natural Japanese greens, identical across all ages, so this
+  // pass-through keeps the palette colour intact. (Kept as a function so every call site that
+  // routed terrain/coast/foliage through it continues to work unchanged.)
+  return hex;
+}
+function _inkize_legacy(hex){
   const n=parseInt(hex.slice(1),16); const r=(n>>16)&255,g=(n>>8)&255,b=n&255;
   let y=0.30*r+0.59*g+0.11*b;            // luminance
   // wider contrast curve pivoted slightly below mid-gray (rice-paper tends light, ink pools dark),
@@ -1065,13 +1071,15 @@ function waterNeighbors(tx,ty){
    all, then fill that single shape with the painterly wash. Frozen terminus tiles keep
    their own crystalline per-tile look (drawFrozenWater) since ice is a different material
    and is SUPPOSED to read faceted. */
-let _swMaskC=null,_swMaskX=null,_swBlurC=null,_swBlurX=null,_swLayerC=null,_swLayerX=null;
+let _swMaskC=null,_swMaskX=null,_swBlurC=null,_swBlurX=null,_swLayerC=null,_swLayerX=null,_swDepthC=null,_swDepthX=null,_swTinyC=null,_swTinyX=null,_swDeepC=null,_swDeepX=null;
 function ensureSpiritMaskBuffers(w,h){
   if(_swMaskC&&_swMaskC.width===w&&_swMaskC.height===h)return;
   _swMaskC=document.createElement('canvas'); _swMaskC.width=w; _swMaskC.height=h; _swMaskX=_swMaskC.getContext('2d');
   _swBlurC=document.createElement('canvas'); _swBlurC.width=w; _swBlurC.height=h; _swBlurX=_swBlurC.getContext('2d');
   _swLayerC=document.createElement('canvas'); _swLayerC.width=w; _swLayerC.height=h; _swLayerX=_swLayerC.getContext('2d');
 }
+function _rgbOf(hex){ const n=parseInt(hex.slice(1),16); return [(n>>16)&255,(n>>8)&255,n&255]; }
+function _ss(e0,e1,x){ if(x<=e0)return 0; if(x>=e1)return 1; const t=(x-e0)/(e1-e0); return t*t*(3-2*t); }
 function drawSpiritWaterBody(g,z,t){
   // 1) collect every spirit OR frozen water tile currently on/near screen, in screen space.
   // NOTE: carveSpiritWater explicitly sets spirit=0 when it sets frozen=1 (the terminus
@@ -1079,11 +1087,16 @@ function drawSpiritWaterBody(g,z,t){
   // filter and were silently never collected — every icicle/drip/bloom fix for the frozen
   // edge was dead code until this filter accepted frozen tiles too.
   const cells=[]; let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
-  const hw=TW/2*z, hh=TH/2*z;
+  // Build the whole body in ZOOM-INDEPENDENT (z=1) coordinates so its painted look — depth
+  // banding, foam, ripples, blur radius, glints — is identical at every zoom and only the final
+  // blit scales. It used to be computed in live screen pixels, so the lake/river visibly changed
+  // character as you zoomed in and out.
+  const hw=TW/2, hh=TH/2;
   for(let ty=0;ty<H;ty++)for(let tx=0;tx<W;tx++){ const c=grid[ty][tx];
     if(c.ter!==WATER||!(c.spirit||c.frozen))continue;
-    const[cx,cy]=s2(tx,ty);
-    if(cx<-TW*z*3||cx>VW+TW*z*3||cy<-TH*z*14||cy>VH+TH*z*6)continue;
+    const[scx,scy]=s2(tx,ty);
+    if(scx<-TW*z*3||scx>VW+TW*z*3||scy<-TH*z*14||scy>VH+TH*z*6)continue;   // cull against the real screen
+    const cx=(tx-ty)*(TW/2), cy=(tx+ty)*(TH/2);                            // z=1 body-space position
     cells.push([cx,cy,tx,ty,!!c.frozen]);
     if(cx-hw<minX)minX=cx-hw; if(cx+hw>maxX)maxX=cx+hw;
     if(cy-hh<minY)minY=cy-hh; if(cy+hh>maxY)maxY=cy+hh;
@@ -1144,20 +1157,84 @@ function drawSpiritWaterBody(g,z,t){
   _swMaskX.drawImage(_swMaskC,0,0);
 
 
-  // 3) paint every body layer (silhouette, wash, glow, flow strokes) at full strength into
-  //    an unclipped scratch layer, then composite that ENTIRE layer through the mask exactly
-  //    once. This avoids the old approach's repeated save/clip/destination-in juggling and
-  //    guarantees the final result never bleeds past the one smooth edge we just built.
+  // 3) DEPTH-FIELD BODY (Bad North style, painterly). The soft blurred mask (_swBlurC, the
+  //    small sbw×sbh buffer) already encodes a natural depth signal: its per-pixel alpha is
+  //    ~1 deep in the interior and feathers toward 0 at the shoreline. We read that alpha as a
+  //    depth value and map it through a colour ramp — bright foam at the wet edge, pale jade
+  //    shallows hugging the bank, then deepening to a dark teal-indigo core. Iso-depth contour
+  //    lines ride the ramp as shoreline-parallel ripples. Because every cue derives from the
+  //    body's own geometry (not screen-space noise) nothing reshuffles on pan/zoom. The colour
+  //    is tinted off the era's water hue so each age keeps its identity.
   _swLayerX.setTransform(1,0,0,1,0,0); _swLayerX.clearRect(0,0,bw,bh);
   _swLayerX.globalCompositeOperation='source-over';
-  // sumi-e silhouette — deep indigo ink ground
-  _swLayerX.globalAlpha=0.94; _swLayerX.fillStyle='#161e2a'; _swLayerX.fillRect(0,0,bw,bh); _swLayerX.globalAlpha=1;
-  // watercolor wash — gradient anchored to fixed canvas-space bounds so it matches the rest
-  // of the body's lighting regardless of where on screen this bounding box sits
-  const deep='#1c2a38', mid=mix('#274656','#2f5a52',0.5), glow='#4f8a86';
-  const base=mid, lt=mix(glow,mid,0.45), dk=shade(deep,-10);
-  const gr=_swLayerX.createLinearGradient(0,-minY,0,VH-minY); gr.addColorStop(0,lt); gr.addColorStop(0.5,base); gr.addColorStop(1,dk);
-  _swLayerX.globalAlpha=0.78; _swLayerX.fillStyle=gr; _swLayerX.fillRect(0,0,bw,bh); _swLayerX.globalAlpha=1;
+  const Pw=(VOID?AGEPAL[0]:agePal()).water;
+  const C_DEEP=_rgbOf(shade(Pw,-50)), C_MID=_rgbOf(shade(Pw,-14)),
+        C_SH=_rgbOf(mix(Pw,'#6fa193',0.46)), C_FOAM=_rgbOf(mix(Pw,'#d6ece2',0.74));
+  if(sbw>1&&sbh>1){
+    if(!_swDepthC){ _swDepthC=document.createElement('canvas'); _swDepthX=_swDepthC.getContext('2d'); }
+    if(_swDepthC.width!==sbw||_swDepthC.height!==sbh){ _swDepthC.width=sbw; _swDepthC.height=sbh; }
+    // CRISP COVERAGE FIELD — moderate blur, alpha saturates fast inside the bank. Drives the
+    // tight foam line and wet-ink contour right at the true shoreline.
+    const cov=_swBlurX.getImageData(0,0,sbw,sbh).data;
+    // SMOOTH DEPTH FIELD — heavily blurred distance-to-shore proxy: downscale the sharp mask to
+    // a tiny buffer then upscale back, so alpha ramps gradually from the deep centre (~1) out to
+    // the bank (~0) across the WHOLE body, not just the edge feather. This is what gives Bad
+    // North's broad shallow→mid→deep banding instead of a flat dark slab.
+    if(!_swTinyC){ _swTinyC=document.createElement('canvas'); _swTinyX=_swTinyC.getContext('2d'); _swDeepC=document.createElement('canvas'); _swDeepX=_swDeepC.getContext('2d'); }
+    const tdim=Math.max(4,Math.min(30,Math.round(Math.max(sbw,sbh)*0.16)));
+    const tdw=Math.max(2,Math.round(sbw/Math.max(sbw,sbh)*tdim)), tdh=Math.max(2,Math.round(sbh/Math.max(sbw,sbh)*tdim));
+    if(_swTinyC.width!==tdw||_swTinyC.height!==tdh){ _swTinyC.width=tdw; _swTinyC.height=tdh; }
+    if(_swDeepC.width!==sbw||_swDeepC.height!==sbh){ _swDeepC.width=sbw; _swDeepC.height=sbh; }
+    _swTinyX.clearRect(0,0,tdw,tdh); _swTinyX.imageSmoothingEnabled=true; _swTinyX.imageSmoothingQuality='high';
+    _swTinyX.drawImage(_swMaskC,0,0,bw,bh,0,0,tdw,tdh);
+    _swDeepX.clearRect(0,0,sbw,sbh); _swDeepX.imageSmoothingEnabled=true; _swDeepX.imageSmoothingQuality='high';
+    _swDeepX.drawImage(_swTinyC,0,0,tdw,tdh,0,0,sbw,sbh);
+    const dep=_swDeepX.getImageData(0,0,sbw,sbh).data;
+    const out=_swDepthX.createImageData(sbw,sbh), od=out.data;
+    const tph=t*0.00045;
+    // ripple rings ride the smooth depth field, drifting slowly shoreward
+    const r1=0.30+0.030*Math.sin(tph), r2=0.55+0.030*Math.sin(tph+2.1), r3=0.78+0.026*Math.sin(tph+4.2);
+    for(let p=0;p<cov.length;p+=4){
+      const c=cov[p+3]/255;                 // coverage (crisp edge)
+      if(c<=0.12){ od[p+3]=0; continue; }
+      const d=dep[p+3]/255;                  // smooth depth 0..1 (centre deep)
+      // colour ramp SH(shallow) -> MID -> DEEP across the smooth depth field
+      const wS=1-_ss(0.10,0.30,d), wM=_ss(0.14,0.34,d)*(1-_ss(0.46,0.74,d)), wD=_ss(0.48,0.80,d);
+      const wsum=wS+wM+wD||1;
+      let r =(C_SH[0]*wS+C_MID[0]*wM+C_DEEP[0]*wD)/wsum,
+          gg=(C_SH[1]*wS+C_MID[1]*wM+C_DEEP[1]*wD)/wsum,
+          b =(C_SH[2]*wS+C_MID[2]*wM+C_DEEP[2]*wD)/wsum;
+      // shoreline-parallel ripple contours on iso-depth bands — a bright crest with a faint
+      // trough just deeper of it, so each ring reads as a real wave line rather than a smudge.
+      const g1=Math.exp(-((d-r1)*(d-r1))/0.0013), g2=Math.exp(-((d-r2)*(d-r2))/0.0015), g3=Math.exp(-((d-r3)*(d-r3))/0.0017);
+      const crest=Math.min(1,g1+0.85*g2+0.7*g3);
+      const tr1=Math.exp(-((d-r1-0.05)*(d-r1-0.05))/0.0013), tr2=Math.exp(-((d-r2-0.05)*(d-r2-0.05))/0.0015), tr3=Math.exp(-((d-r3-0.05)*(d-r3-0.05))/0.0017);
+      const trough=Math.min(1,tr1+0.85*tr2+0.7*tr3);
+      const rk=crest*0.30; r+=(C_FOAM[0]-r)*rk; gg+=(C_FOAM[1]-gg)*rk; b+=(C_FOAM[2]-b)*rk;
+      const tk=trough*0.12; r*=(1-tk); gg*=(1-tk); b*=(1-tk);
+      // CRISP FOAM LINE — a thin bright band sitting just inside the bank (driven by coverage),
+      // not the whole wide feather, so it reads as a wet shoreline rather than fog.
+      const foam=_ss(0.36,0.50,c)*(1-_ss(0.50,0.66,c));
+      if(foam>0.01){ const k=Math.min(0.78,foam*0.92); r+=(C_FOAM[0]-r)*k; gg+=(C_FOAM[1]-gg)*k; b+=(C_FOAM[2]-b)*k; }
+      // WET-INK BANK just outside the foam (toward the bank) — a thin sumi-e darkening contour
+      const ink=_ss(0.18,0.32,c)*(1-_ss(0.32,0.48,c));
+      if(ink>0.02){ const k=ink*0.38; r*=(1-k); gg*=(1-k); b*=(1-k); }
+      od[p]=r|0; od[p+1]=gg|0; od[p+2]=b|0; od[p+3]=255;
+    }
+    _swDepthX.putImageData(out,0,0);
+    _swLayerX.imageSmoothingEnabled=true; _swLayerX.imageSmoothingQuality='high';
+    _swLayerX.drawImage(_swDepthC,0,0,sbw,sbh,0,0,bw,bh);
+  } else {
+    _swLayerX.fillStyle=shade(Pw,-20); _swLayerX.fillRect(0,0,bw,bh);
+  }
+  // 4) moonlight sheen — a soft directional reflection running down the body from the upper-left,
+  //    the broad specular the eye reads as "this is a wet, reflective surface" (anchored to fixed
+  //    canvas space so it sits consistently regardless of where the bounding box lands).
+  _swLayerX.globalCompositeOperation='lighter';
+  const sg=_swLayerX.createLinearGradient(0,0,0,bh);
+  sg.addColorStop(0,'rgba(150,196,196,0.20)'); sg.addColorStop(0.45,'rgba(120,170,176,0.07)'); sg.addColorStop(1,'rgba(120,170,176,0)');
+  _swLayerX.fillStyle=sg; _swLayerX.fillRect(0,0,bw,bh);
+  _swLayerX.globalCompositeOperation='source-over';
   // icy pale bloom at every frozen cell — blends the deep-water wash into glacial ice so the
   // colour itself transitions smoothly instead of cutting hard at the terminus
   for(const[cx,cy,tx,ty,fz]of cells){ if(!fz)continue;
@@ -1166,73 +1243,24 @@ function drawSpiritWaterBody(g,z,t){
     ig.addColorStop(0,'rgba(223,236,239,0.98)'); ig.addColorStop(0.35,'rgba(200,218,224,0.85)'); ig.addColorStop(0.7,'rgba(183,202,210,0.45)'); ig.addColorStop(1,'rgba(183,202,210,0)');
     _swLayerX.fillStyle=ig; _swLayerX.beginPath(); _swLayerX.arc(ox,oy,ir,0,7); _swLayerX.fill();
   }
-  // deep glow undertone — soft teal-violet bloom drifting through the body
-  const gcx=(maxX-minX)/2, gcy=(maxY-minY)/2, gph=t*0.00006;
-  const glowAmt=0.5+0.5*Math.sin(gph+(minX*0.002));
-  _swLayerX.globalAlpha=0.10*glowAmt; const rg=_swLayerX.createRadialGradient(gcx,gcy,0,gcx,gcy,Math.max(bw,bh)*0.55);
-  rg.addColorStop(0,'#5fa8a0'); rg.addColorStop(1,hexA('#5fa8a0',0));
-  _swLayerX.fillStyle=rg; _swLayerX.beginPath();_swLayerX.arc(gcx,gcy,Math.max(bw,bh)*0.55,0,7);_swLayerX.fill(); _swLayerX.globalAlpha=1;
-  // 4) flow ribbons — one continuous stroke per river "spine" run, walked along the REAL
-  //    path (8-directional, same as carveSpiritWater's diagonal meander) instead of a single
-  //    locked horizontal/vertical axis. The old single-axis walker broke at every diagonal
-  //    step in the actual river path, restarting as tiny runs at mismatched angles, which is
-  //    what produced the zigzag/sawtooth look. Pond tiles get a few long lazy drift strokes.
-  const D8R=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]];
-  const visited=new Set(); const runs=[]; const pondPts=[];
+  // 5) surface glints — a sparse scatter of tiny moonlight sparkles on the open water, seeded
+  //    from each cell's FIXED tile coords (never screen-space) so they don't reshuffle on pan,
+  //    twinkling gently over time. Only on deeper open tiles, skipped on the river's narrow spine.
+  _swLayerX.globalCompositeOperation='lighter';
   for(const[cx,cy,tx,ty,fz]of cells){ if(fz)continue;
-    const N=waterNeighbors(tx,ty);
-    if(N.deg>=3){ pondPts.push([cx,cy]); continue; }
-    const key=tx+','+ty; if(visited.has(key))continue;
-    visited.add(key); let run=[[cx-minX,cy-minY]];
-    // extend forward and backward along whichever real wet neighbour continues the channel
-    for(let dir=0;dir<2;dir++){ let cxw2=tx,cyw2=ty;
-      for(let guard=0;guard<400;guard++){
-        let found=null;
-        for(const[dx,dy]of D8R){ const nx=cxw2+dx,ny=cyw2+dy; const nkey=nx+','+ny;
-          if(visited.has(nkey))continue; if(!inB(nx,ny))continue;
-          const nc=grid[ny][nx]; if(nc.ter!==WATER||!nc.spirit||nc.frozen)continue;
-          if(waterNeighbors(nx,ny).deg>=3)continue;   // stop at the open pond's rim, don't wander into it
-          found=[nx,ny]; break; }
-        if(!found)break; const[nx,ny]=found; visited.add(nx+','+ny);
-        const[scx,scy]=s2(nx,ny);
-        if(dir===0) run.unshift([scx-minX,scy-minY]); else run.push([scx-minX,scy-minY]);
-        cxw2=nx; cyw2=ny;
-      }
-    }
-    if(run.length>=2) runs.push(run);
+    if(waterNeighbors(tx,ty).deg<3)continue;            // open-water (pond) tiles only
+    const h0=vhash(tx*1.7+ty*0.3, ty*2.1+11);
+    if(h0>0.5)continue;                                  // ~half the tiles get a glint
+    const ph=h0*6.28, tw=0.5+0.5*Math.sin(t*0.0011+ph*3.1);
+    const gx=cx-minX+(vhash(tx+3,ty*5+7)-0.5)*hw*0.9, gy=cy-minY+(vhash(tx*5+1,ty+9)-0.5)*hh*0.9;
+    const gr2=Math.max(0.7,hh*0.10)*(0.7+0.3*tw);
+    const sgr=_swLayerX.createRadialGradient(gx,gy,0,gx,gy,gr2*2.6);
+    sgr.addColorStop(0,'rgba(232,247,241,'+(0.72*tw)+')'); sgr.addColorStop(0.32,'rgba(196,224,219,'+(0.16*tw)+')'); sgr.addColorStop(1,'rgba(196,224,219,0)');
+    _swLayerX.fillStyle=sgr; _swLayerX.beginPath(); _swLayerX.arc(gx,gy,gr2*2.6,0,7); _swLayerX.fill();
+    // crisp pinpoint core
+    _swLayerX.fillStyle='rgba(238,250,245,'+(0.55*tw)+')'; _swLayerX.beginPath(); _swLayerX.arc(gx,gy,Math.max(0.5,gr2*0.4),0,7); _swLayerX.fill();
   }
-  // smooth each run's point chain (simple 3-point moving average, a couple passes) so the
-  // ribbon reads as one continuous curve even though the underlying tiles step diagonally
-  function smoothRun(run){ if(run.length<3)return run;
-    let pts=run;
-    for(let pass=0;pass<2;pass++){ const out=[pts[0]];
-      for(let i=1;i<pts.length-1;i++){ const a=pts[i-1],b=pts[i],c=pts[i+1];
-        out.push([(a[0]+b[0]*2+c[0])/4,(a[1]+b[1]*2+c[1])/4]); }
-      out.push(pts[pts.length-1]); pts=out; }
-    return pts;
-  }
-  for(const run of runs){
-    const sm=smoothRun(run);
-    _swLayerX.globalAlpha=0.22; _swLayerX.strokeStyle=glow; _swLayerX.lineWidth=Math.max(1,hh*0.5); _swLayerX.lineCap='round'; _swLayerX.lineJoin='round';
-    _swLayerX.beginPath(); _swLayerX.moveTo(sm[0][0],sm[0][1]);
-    for(let i=1;i<sm.length;i++) _swLayerX.lineTo(sm[i][0],sm[i][1]);
-    _swLayerX.stroke(); _swLayerX.globalAlpha=1;
-    _swLayerX.globalAlpha=0.22; _swLayerX.strokeStyle='rgba(206,232,224,0.6)'; _swLayerX.lineWidth=Math.max(0.6,hh*0.16);
-    _swLayerX.beginPath(); _swLayerX.moveTo(sm[0][0],sm[0][1]-hh*0.18);
-    for(let i=1;i<sm.length;i++) _swLayerX.lineTo(sm[i][0],sm[i][1]-hh*0.18);
-    _swLayerX.stroke(); _swLayerX.globalAlpha=1;
-  }
-
-  if(pondPts.length){
-    let pminX=1e9,pminY=1e9,pmaxX=-1e9,pmaxY=-1e9;
-    for(const[cx,cy]of pondPts){ if(cx<pminX)pminX=cx; if(cx>pmaxX)pmaxX=cx; if(cy<pminY)pminY=cy; if(cy>pmaxY)pmaxY=cy; }
-    const pw=pmaxX-pminX, ph2=pmaxY-pminY, pcx=(pminX+pmaxX)/2-minX, pcy=(pminY+pmaxY)/2-minY;
-    for(let i=0;i<3;i++){ const fy=pcy+(i-1)*ph2*0.22, amp=pw*0.34, drift=Math.sin(t*0.00007+i*2.1)*hh*0.4;
-      _swLayerX.globalAlpha=0.12; _swLayerX.strokeStyle=glow; _swLayerX.lineWidth=Math.max(1,hh*0.34); _swLayerX.lineCap='round';
-      _swLayerX.beginPath(); _swLayerX.moveTo(pcx-amp,fy+drift);
-      _swLayerX.quadraticCurveTo(pcx,fy-hh*0.3+drift,pcx+amp,fy+drift); _swLayerX.stroke(); _swLayerX.globalAlpha=1;
-    }
-  }
+  _swLayerX.globalCompositeOperation='source-over';
   // 5) mask the whole painted layer in ONE pass, so every layer above shares the exact
   //    same smooth edge with zero risk of mismatched clips
   _swLayerX.globalCompositeOperation='destination-in';
@@ -1247,20 +1275,22 @@ function drawSpiritWaterBody(g,z,t){
   _swLayerX.globalAlpha=0.4; _swLayerX.drawImage(_swBlurC,0,0,sbw,sbh,0,0,bw,bh);   // already-soft pre-restamp mask = a ready-made wider, fainter halo
   _swLayerX.globalAlpha=1;
   _swLayerX.restore();
-  // 7) blit the finished, fully-masked body onto the real ground buffer in one draw
+  // blit the finished, fully-masked body. The buffer was painted in z=1 body space, so scale
+  // it by the live zoom and offset by the camera — this lands on the identical screen rectangle
+  // the old screen-space path produced, but the painted detail is now zoom-stable.
   g.save(); g.setTransform(1,0,0,1,0,0);
-  g.drawImage(_swLayerC,0,0,bw,bh,minX,minY,bw,bh);
+  g.drawImage(_swLayerC,0,0,bw,bh, cam.x+minX*z, cam.y+minY*z, bw*z, bh*z);
   g.restore();
   // 8) re-stamp icicles on top of the body — they were drawn per-tile during the terrain
   //    pass (paintFrozenEdge) but the body's bloom/wash just painted over them; redraw here
   //    so the frozen waterfall hangs visibly off the now-seamless edge.
   for(const[cx,cy,tx,ty,fz]of cells){ if(!fz)continue;
-    const fc=grid[ty][tx];
+    const fc=grid[ty][tx]; const[scx,scy]=s2(tx,ty); const shw=TW/2*z, shh=TH/2*z;   // these draw on the real screen buffer, not the z=1 body buffer
     g.globalAlpha=0.5; g.strokeStyle='rgba(247,252,254,0.85)'; g.lineWidth=0.7*z;
-    g.beginPath();g.moveTo(cx-hw*0.32,cy-hh*0.08);g.lineTo(cx+hw*0.06,cy-hh*0.42);g.lineTo(cx+hw*0.34,cy+0.02);g.stroke();
+    g.beginPath();g.moveTo(scx-shw*0.32,scy-shh*0.08);g.lineTo(scx+shw*0.06,scy-shh*0.42);g.lineTo(scx+shw*0.34,scy+0.02);g.stroke();
     g.strokeStyle='rgba(118,148,164,0.5)';
-    g.beginPath();g.moveTo(cx-hw*0.2,cy+hh*0.22);g.lineTo(cx+hw*0.22,cy-hh*0.04);g.stroke(); g.globalAlpha=1;
-    paintFrozenEdge(g,tx,ty,fc,cx,cy,hw,hh,z);
+    g.beginPath();g.moveTo(scx-shw*0.2,scy+shh*0.22);g.lineTo(scx+shw*0.22,scy-shh*0.04);g.stroke(); g.globalAlpha=1;
+    paintFrozenEdge(g,tx,ty,fc,scx,scy,shw,shh,z);
   }
 }
 
@@ -1388,11 +1418,11 @@ function drawTerrain(g,tx,ty,c,cx,cy,z,t){ const hw=TW/2*z,hh=TH/2*z,k=c.ter; le
     if(c.cbase && c.coast){ base=mix(base,c.cbase,0.42); lt=shade(base,12); dk=shade(base,-12); } }
   else if(k===SNOW){base='#dfe3e2';lt='#eef2f1';dk='#c2cac9';}
   else if(k===ROCK){base='#7e776b';lt='#928a7c';dk='#655f55';}
-  else if(k===SAND){base='#9c8f72';lt='#aa9c7d';dk='#8a7a5c';}   // DARKENED (was #bfae8c/#cdbc9a/#a4926f): those luminances blew out to near-white once run through inkize's contrast push, so every beach/coast tile around the island read as a pale cloud-bank instead of dissolving into the dark void edge. Now lands close to grass's own inkized tone.
-  else if(k===BARE){base='#a3855f';lt='#b59570';dk='#876c4c';}
-  else if(k===GRASS2){base='#7c8550';lt='#8c9560';dk='#646d40';}
-  else if(k===FOREST){base='#6a7752';lt='#7a8760';dk='#586243';}
-  else{base='#6e7c4a';lt='#7e8b58';dk='#586340';}
+  else if(k===SAND){base='#bfb184';lt='#cdc093';dk='#a89a70';}   // soft beach tan, faintly green
+  else if(k===BARE){base='#9a8f5a';lt='#aa9f68';dk='#827853';}   // muted khaki-olive earth/paths
+  else if(k===GRASS2){base='#7d9b4d';lt='#8eac5c';dk='#62803a';}  // 若草 young grass green
+  else if(k===FOREST){base='#5a7d3e';lt='#6c8f4e';dk='#476730';}  // deep foliage green
+  else{base='#6f9144';lt='#80a254';dk='#577334';}
   // smoothed colour field (set in genMap) — softens type-to-type transitions before any shading
   if(k!==WATER && c.cbase){ base=c.cbase; lt=shade(base,22); dk=shade(base,-24); }
   // PER-AGE RETINT (Art Progression): shift this tile toward the active age's master palette so
@@ -1679,14 +1709,20 @@ function drawStall(g,cx,cy,z,st){ const hh=TH/2*z; shadowEllipse(g,cx,cy+hh*0.3,
   const ay=cy-ph; g.fillStyle=tc; g.beginPath();g.moveTo(cx-9*z,ay+2*z);g.lineTo(cx+9*z,ay+2*z);g.lineTo(cx+7*z,ay-3.5*z);g.lineTo(cx-7*z,ay-3.5*z);g.closePath();g.fill();
   g.fillStyle=shade(tc,30); for(let i=0;i<5;i+=2){const f=i/5; g.beginPath();g.moveTo(cx-9*z+18*z*f,ay+2*z);g.lineTo(cx-9*z+18*z*(f+0.2),ay+2*z);g.lineTo(cx-7*z+14*z*(f+0.2),ay-3.5*z);g.lineTo(cx-7*z+14*z*f,ay-3.5*z);g.closePath();g.fill();}
   g.fillStyle=shade(tc,-16); g.fillRect(cx-9*z,ay+2*z,18*z,1.6*z); drawTradeMark(g,cx,ay-0.6*z,z,st.trade); }
-function drawMachiya(g,cx,cy,z,st,wallH){ const tc=st.noren||'#b5532f', topW=cy-wallH;
-  g.fillStyle='#3a2a1c'; g.fillRect(cx+1*z,topW+9*z,15*z,wallH-9*z);                                                               // shop interior
-  g.strokeStyle='#8a6638';g.lineWidth=0.42*z; for(let i=0;i<8;i++){const lx=cx+1.8*z+i*1.85*z; g.beginPath();g.moveTo(lx,topW+11*z);g.lineTo(lx,cy-1*z);g.stroke();} // koshi lattice
-  g.fillStyle=tc; g.fillRect(cx+8*z,topW+9*z,3*z,4*z); g.fillRect(cx+11.6*z,topW+9*z,3*z,4*z);                                      // split noren
-  g.fillStyle=shade(tc,26); g.fillRect(cx+8*z,topW+9*z,3*z,1*z); g.fillRect(cx+11.6*z,topW+9*z,3*z,1*z);
-  g.fillStyle=shade(tc,-12); g.fillRect(cx-1*z,topW+4*z,17*z,3.8*z); g.strokeStyle='#efe2c4';g.lineWidth=0.42*z;g.strokeRect(cx-1*z,topW+4*z,17*z,3.8*z); // kanban board
-  drawTradeMark(g,cx+7.5*z,topW+5.9*z,z,st.trade);
-  g.fillStyle='#a07a3a'; g.fillRect(cx+2.5*z,cy-3*z,3.6*z,3*z); g.fillStyle='#8a6630';g.fillRect(cx+2.5*z,cy-3*z,3.6*z,1*z); }      // goods crate
+function drawMachiya(g,cx,cy,z,st,wallH){ const tc=st.noren||'#b5532f';
+  const hw=TW/2*z,hh=TH/2*z, gY=x=>cy+hh-hh*((x-cx)/hw);                          // ground y on the right face
+  const sx1=cx+1*z, sx2=cx+16*z, storeH=Math.min(wallH-6*z,16*z);
+  const gb=x=>gY(x)-2*z, tp=x=>gY(x)-2*z-storeH;                                  // sill + lintel, both sloped to ground
+  const b1=gb(sx1),b2=gb(sx2),t1=tp(sx1),t2=tp(sx2);
+  g.fillStyle='#3a2a1c'; g.beginPath();g.moveTo(sx1,t1);g.lineTo(sx2,t2);g.lineTo(sx2,b2);g.lineTo(sx1,b1);g.closePath();g.fill();   // recessed shop interior, grounded
+  g.strokeStyle='#8a6638';g.lineWidth=0.42*z;                                                                                       // koshi lattice down to each column's ground
+  for(let i=0;i<8;i++){ const lx=sx1+0.7*z+i*1.95*z; if(lx>sx2)break; g.beginPath();g.moveTo(lx,tp(lx)+1.6*z);g.lineTo(lx,gb(lx));g.stroke(); }
+  g.fillStyle='#7a5a36'; g.beginPath();g.moveTo(sx1,b1);g.lineTo(sx2,b2);g.lineTo(sx2,b2+1.8*z);g.lineTo(sx1,b1+1.8*z);g.closePath();g.fill(); // raised wooden threshold (agarikamachi)
+  for(const nx of [cx+8*z,cx+11.6*z]){ const ny=tp(nx); g.fillStyle=tc; g.fillRect(nx,ny,3*z,4*z); g.fillStyle=shade(tc,26); g.fillRect(nx,ny,3*z,1*z); } // split noren at the lintel
+  const ky=tp(cx+7.5*z)-4.6*z;                                                                                                       // kanban signboard just above the lintel
+  g.fillStyle=shade(tc,-12); g.fillRect(cx-1*z,ky,17*z,3.8*z); g.strokeStyle='#efe2c4';g.lineWidth=0.42*z;g.strokeRect(cx-1*z,ky,17*z,3.8*z);
+  drawTradeMark(g,cx+7.5*z,ky+1.9*z,z,st.trade);
+  const cgy=gb(cx+4.3*z); g.fillStyle='#a07a3a'; g.fillRect(cx+2.5*z,cgy-3*z,3.6*z,3*z); g.fillStyle='#8a6630';g.fillRect(cx+2.5*z,cgy-3*z,3.6*z,1*z); } // goods crate on the ground
 /* tiled east-asian building w/ stories, props, tiers, night glow */
 function drawBuilding(g,cx,cy,z,st){ const hw=TW/2*z,hh=TH/2*z,wallH=(st.h||20)*z; const night=envNight();
   // STABLE WOBBLE SEED — invert s2() to recover this building's integer tile (WX,WY). All hand-painted
@@ -1726,20 +1762,82 @@ function drawBuilding(g,cx,cy,z,st){ const hw=TW/2*z,hh=TH/2*z,wallH=(st.h||20)*
     glassFace(g,[cx,cy+hh],[cx-hw,cy],[cx,cy+hh-wallH],4,flr,night);     // left face glass
     if(st.neon){ g.strokeStyle=st.neon;g.lineWidth=0.98*z; g.beginPath();g.moveTo(cx,cy+hh-wallH);g.lineTo(cx+hw,cy-wallH);g.moveTo(cx,cy+hh-wallH);g.lineTo(cx-hw,cy-wallH);g.stroke(); }
   } else {
-  // doorway + noren curtain
-  g.fillStyle='#2c2016'; g.fillRect(cx+7*z,cy-wallH+6*z,8*z,wallH-7*z);
+  // ENTRANCE — sheared to sit ON the isometric ground line. gY(x) gives the ground y for any
+  // x on the right (lit) wall face; the door is a parallelogram from that ground line up, so it
+  // reads as a real doorway people walk into (was a flat-bottomed rect floating mid-wall = window).
+  const gY=x=>cy+hh-hh*((x-cx)/hw);
   if(st.machiya){ drawMachiya(g,cx,cy,z,st,wallH); }
-  else if(!st.modern){ g.fillStyle=st.noren||'#2c4a8a'; g.fillRect(cx+7*z,cy-wallH+6*z,8*z,3.4*z);
-    g.fillStyle=shade(st.noren||'#2c4a8a',-20); g.fillRect(cx+10.7*z,cy-wallH+6*z,0.6*z,3.4*z);
-    if(st.form==='shop')drawTradeMark(g,cx+11*z,cy-wallH+7.6*z,z,st.trade); else { g.fillStyle='#efe2c4'; g.fillRect(cx+9*z,cy-wallH+7*z,1.4*z,1.4*z); } }
+  else {
+    const dx1=cx+6.5*z, dx2=cx+15.5*z, dvar=vhash(WX*2.3+WY*1.7,31);
+    const bL=gY(dx1)-2.2*z, bR=gY(dx2)-2.2*z;             // sit on the stone sill, just above ground
+    const dh=Math.min(wallH-3.5*z, st.modern?15*z:14*z);  // door height
+    const tLy=bL-dh, tRy=bR-dh;                            // lintel (sloped, parallel to ground)
+    g.fillStyle=st.modern?'#1c2630':'#241a12';             // recessed dark opening
+    g.beginPath();g.moveTo(dx1,tLy);g.lineTo(dx2,tRy);g.lineTo(dx2,bR);g.lineTo(dx1,bL);g.closePath();g.fill();
+    if(st.modern){                                          // glass/metal entrance: sheen + handle bar
+      g.fillStyle='rgba(150,200,225,0.20)'; g.beginPath();g.moveTo(dx1,tLy);g.lineTo(dx2,tRy);g.lineTo(dx2,bR);g.lineTo(dx1,bL);g.closePath();g.fill();
+      const mx=(dx1+dx2)/2; g.strokeStyle='rgba(190,225,245,0.5)';g.lineWidth=0.7*z; g.beginPath();g.moveTo(mx,(tLy+tRy)/2+dh*0.28);g.lineTo(mx,bL-2*z);g.stroke();
+    } else if(dvar<0.5){                                    // split sliding shoji — paper panels + mullion
+      g.fillStyle=night>0.3?'rgba(245,228,170,0.46)':'rgba(232,220,192,0.30)';
+      g.beginPath();g.moveTo(dx1,tLy);g.lineTo(dx2,tRy);g.lineTo(dx2,bR);g.lineTo(dx1,bL);g.closePath();g.fill();
+      const mx=(dx1+dx2)/2; g.strokeStyle='rgba(58,42,26,0.7)';g.lineWidth=0.6*z;
+      g.beginPath();g.moveTo(mx,(tLy+tRy)/2);g.lineTo(mx,(bL+bR)/2);g.stroke();
+    } else {                                                // vertical plank door
+      g.strokeStyle='rgba(20,12,6,0.5)';g.lineWidth=0.5*z;
+      for(let i=1;i<4;i++){ const f=i/4, px=dx1+(dx2-dx1)*f; g.beginPath();g.moveTo(px,tLy+(tRy-tLy)*f);g.lineTo(px,bL+(bR-bL)*f);g.stroke(); }
+    }
+    // timber frame: jambs + sloped lintel beam + stone sill, for a defined, grounded entrance
+    g.fillStyle=shade(post,-8); g.fillRect(dx1-1.2*z,tLy,1.3*z,dh); g.fillRect(dx2-0.1*z,tRy,1.3*z,dh);
+    g.fillStyle=shade(post,8); g.beginPath();g.moveTo(dx1-1.2*z,tLy-1.5*z);g.lineTo(dx2+1.3*z,tRy-1.5*z);g.lineTo(dx2+1.3*z,tRy);g.lineTo(dx1-1.2*z,tLy);g.closePath();g.fill();
+    g.fillStyle='#9a8f78'; g.beginPath();g.moveTo(dx1-1*z,bL);g.lineTo(dx2+1*z,bR);g.lineTo(dx2+1*z,bR+1.8*z);g.lineTo(dx1-1*z,bL+1.8*z);g.closePath();g.fill();
+    if(!st.modern){                                         // noren split curtain hung at the lintel
+      const nc=st.noren||'#2c4a8a', nh=3.6*z;
+      g.fillStyle=nc; g.beginPath();g.moveTo(dx1,tLy);g.lineTo(dx2,tRy);g.lineTo(dx2,tRy+nh);g.lineTo(dx1,tLy+nh);g.closePath();g.fill();
+      g.fillStyle=shade(nc,24); g.beginPath();g.moveTo(dx1,tLy);g.lineTo(dx2,tRy);g.lineTo(dx2,tRy+0.9*z);g.lineTo(dx1,tLy+0.9*z);g.closePath();g.fill();
+      const mx=(dx1+dx2)/2, my=(tLy+tRy)/2; g.fillStyle=shade(nc,-22); g.fillRect(mx-0.3*z,my,0.6*z,nh);
+      if(st.form==='shop')drawTradeMark(g,mx+0.4*z,my+1.9*z,z,st.trade); else { g.fillStyle='#efe2c4'; g.fillRect(mx-2.6*z,my+1.1*z,1.4*z,1.4*z); }
+    }
+  }
   const stories=Math.max(1,st.stories||1), winBase=st.modern?'#9fd0f0':'#caa24a';
   const span=Math.max(7*z,(wallH-9*z)); const step=stories>1?span/stories:0;
+  const wvar=vhash(WX*1.9+WY*2.6,53), frameC=st.modern?'rgba(70,92,108,0.6)':shade(post,-4);
+  const drawWin=(wx,wy,ww,wh)=>{                                  // framed window w/ seeded muntin density (variety per building)
+    litWin(g,wx,wy,ww,wh,night,winBase);
+    g.fillStyle=frameC; g.fillRect(wx-0.8*z,wy-0.8*z,ww+1.6*z,0.8*z); g.fillRect(wx-0.8*z,wy+wh,ww+1.6*z,0.9*z);
+    g.fillRect(wx-0.8*z,wy-0.8*z,0.8*z,wh+1.6*z); g.fillRect(wx+ww,wy-0.8*z,0.8*z,wh+1.6*z);
+    g.strokeStyle=st.modern?'rgba(40,70,90,0.5)':'rgba(90,60,30,0.55)';g.lineWidth=0.35*z; g.beginPath();
+    g.moveTo(wx+ww*0.5,wy);g.lineTo(wx+ww*0.5,wy+wh); g.moveTo(wx,wy+wh*0.5);g.lineTo(wx+ww,wy+wh*0.5);
+    if(wvar>0.55){ g.moveTo(wx+ww*0.25,wy);g.lineTo(wx+ww*0.25,wy+wh); g.moveTo(wx+ww*0.75,wy);g.lineTo(wx+ww*0.75,wy+wh); } // denser shoji grid
+    g.stroke();
+  };
   for(let s=(st.machiya?1:0);s<stories;s++){ const wy=cy-wallH+5*z+s*step; if(wy>cy+hh-6*z)break;
-    litWin(g,cx-15*z,wy,7*z,4.5*z,night,winBase);
-    g.strokeStyle=st.modern?'rgba(40,70,90,0.5)':'rgba(90,60,30,0.55)';g.lineWidth=0.35*z;
-    g.beginPath();g.moveTo(cx-11.5*z,wy);g.lineTo(cx-11.5*z,wy+4.5*z);g.moveTo(cx-15*z,wy+2.2*z);g.lineTo(cx-8*z,wy+2.2*z);g.stroke();
-    if((st.modern||stories>1)&&!(st.machiya&&s===0)){ litWin(g,cx+4*z,wy+1*z,5*z,3.6*z,night,winBase);
-      g.beginPath();g.moveTo(cx+6.5*z,wy+1*z);g.lineTo(cx+6.5*z,wy+4.6*z);g.stroke(); } }
+    drawWin(cx-15*z,wy,7*z,4.5*z);
+    if((st.modern||stories>1)&&!(st.machiya&&s===0)) drawWin(cx+4*z,wy+1*z,5*z,3.6*z);
+  }
+  // ── ERA-SPECIFIC FACADE TRIM (mid-lower wall, below the eave) ──────────────────────────────
+  if(z>0.55){ const _era=st.era!=null?st.era:(typeof S!=='undefined'?S.era:0), wear=st.wear||0;
+    const gYr=x=>cy+hh-hh*((x-cx)/hw), gYl=x=>cy+hh-hh*((cx-x)/hw), tseed=WX*1.7+WY*2.3;
+    if(_era===5){                                                    // HEIAN — hanging sudare bamboo blind (golden-era refinement)
+      const bx1=cx+18*z,bx2=cx+27*z, tb=x=>gYr(x)-wallH+8*z, bh=Math.min(12*z,wallH*0.42);
+      g.fillStyle='rgba(170,142,88,0.5)'; g.beginPath();g.moveTo(bx1,tb(bx1));g.lineTo(bx2,tb(bx2));g.lineTo(bx2,tb(bx2)+bh);g.lineTo(bx1,tb(bx1)+bh);g.closePath();g.fill();
+      g.fillStyle='#8a2f26'; g.beginPath();g.moveTo(bx1,tb(bx1));g.lineTo(bx2,tb(bx2));g.lineTo(bx2,tb(bx2)+1.4*z);g.lineTo(bx1,tb(bx1)+1.4*z);g.closePath();g.fill();   // valance
+      g.strokeStyle='rgba(70,52,30,0.45)';g.lineWidth=0.3*z; for(let i=1;i<6;i++){ const f=i/6; g.beginPath();g.moveTo(bx1,tb(bx1)+bh*f);g.lineTo(bx2,tb(bx2)+bh*f);g.stroke(); }
+    }
+    if(_era>=6&&_era<=7){ const w=Math.min(1, wear+(_era===7?0.22:0));  // KAMAKURA/SENGOKU — weathering; collapse era reads worn even at baseline
+      if(w>0.05){ g.strokeStyle='rgba(28,22,16,'+(0.08+0.20*w)+')';g.lineWidth=0.7*z;g.lineCap='round';   // grime streaks dripping from the eave
+        for(let i=0;i<5;i++){ const f=(i+0.5)/5; let x=cx+hw*f,yt=gYr(x)-wallH+7*z,yl=(0.28+vhash(tseed+i,1)*0.46)*wallH; g.beginPath();g.moveTo(x,yt);g.lineTo(x+0.6*z,yt+yl);g.stroke();
+          x=cx-hw*f; yt=gYl(x)-wallH+7*z; yl=(0.28+vhash(tseed+i,2)*0.46)*wallH; g.beginPath();g.moveTo(x,yt);g.lineTo(x-0.6*z,yt+yl);g.stroke(); } g.lineCap='butt'; }
+      if(wear>0.34){ const px=cx-15*z, py=gYl(cx-12*z)-wallH*0.5, pw=8*z, ph=5*z;                          // boarded-up window (abandonment / siege)
+        g.strokeStyle='#5a4128';g.lineWidth=1.7*z;g.lineCap='round'; g.beginPath();g.moveTo(px-1*z,py-ph*0.55);g.lineTo(px+pw,py+ph*0.55);g.moveTo(px-1*z,py+ph*0.55);g.lineTo(px+pw,py-ph*0.55);g.stroke();g.lineCap='butt';
+        g.fillStyle='#241810'; for(const[dx,dy]of [[-1,-0.55],[pw,0.55],[-1,0.55],[pw,-0.55]]){ g.beginPath();g.arc(px+dx*z,py+dy*ph,0.7*z,0,7);g.fill(); } }
+    }
+    if(_era===8){ const nc=st.neon||'#14f195';                       // QUANTUM EDO — vertical neon sign strip + glow
+      const sx=cx+20*z, sy=gYr(sx)-wallH+8*z, sh=Math.min(14*z,wallH*0.46);
+      g.fillStyle=nc; g.globalAlpha=0.12; g.beginPath();g.ellipse(sx,sy+sh*0.5,4.5*z,sh*0.62,0,0,7);g.fill(); g.globalAlpha=1;
+      g.fillStyle='rgba(8,10,12,0.55)'; g.fillRect(sx-1.7*z,sy-1*z,3.8*z,sh+2*z);
+      g.fillStyle=nc; g.globalAlpha=0.92; for(let i=0;i<4;i++) g.fillRect(sx-0.9*z, sy+sh*(i/4)+0.7*z, 2.1*z, 1.3*z); g.globalAlpha=1;
+    }
+  }
   }
   const roof=st.roof||'#3d6e8c',roofD=shade(roof,-26);
   const ry=cy-wallH,ov=(st.ov||9)*z,ridge=(st.rh||16)*z;
@@ -1831,7 +1929,7 @@ function zoneStyle(zone,era,dev,seed){ const E=ERAS[era];
   const NORENS=['#2c4a8a','#7a2d24','#2c6a3a','#5a2d6a','#1a1a2a','#8a5a1a'];
   const noren= form==='shop'?(neon||TRADEC[trade]) : NORENS[(vR*NORENS.length)|0];
   return {roof,wall,post,h,rh,ov,modern,flat,factoryRoof,corrugated,neon,stories,props,tiers,noren,form,vR,
-    thatch,stall,machiya,glassTower,workshop,brickChimney,kiln,trade}; }
+    thatch,stall,machiya,glassTower,workshop,brickChimney,kiln,trade,era}; }
 function drawLot(g,cx,cy,z,zone){ const hw=TW/2*z,hh=TH/2*z;
   diamondPath(g,cx,cy,z); g.fillStyle='#b89a66'; g.fill();           // cleared dirt plot
   const col= zone===ZR?'#3f8a4a' : zone===ZC?'#3a6ea5' : '#caa23a';
@@ -2076,13 +2174,17 @@ function paintCastShadow(g,cx,cy,z){ const hh=TH/2*z; g.fillStyle='rgba(26,30,36
 /* Silhouette LOD for any building: two wall faces + roof massing only — no windows,
    noren, glass, props or ribs. Drawn into the same buffer so the sumi-e ink outline is
    preserved; only the sub-pixel interior detail (invisible at overview zoom) is dropped. */
-function drawBuildingLOD(g,cx,cy,z,st){ const hw=TW/2*z,hh=TH/2*z,wallH=(st.h||20)*z,night=envNight();
+function drawBuildingLOD(g,cx,cy,z,st){ let hw=TW/2*z,hh=TH/2*z; const wallH=(st.h||20)*z,night=envNight();
+  // Footprint inset: a building used to fill its whole tile and the flared eaves then spilled
+  // ~1 tile past it, so neighbouring roofs ran into each other in a messy overlap. Pulling the
+  // base in a touch (and trimming the overhang below) leaves a clean gap between adjacent plots.
+  hw*=0.84; hh*=0.84;
   shadowEllipse(g,cx,cy+hh*0.4,TW*0.42,z);
   let wall=st.wall||'#ece0c4'; if(night>0.3)wall=shade(wall,-Math.round(night*24));
   const wallD=shade(wall,-34);
   g.fillStyle=wallD; g.beginPath();g.moveTo(cx-hw,cy);g.lineTo(cx,cy+hh);g.lineTo(cx,cy+hh-wallH);g.lineTo(cx-hw,cy-wallH);g.closePath();g.fill();
   g.fillStyle=wall;  g.beginPath();g.moveTo(cx,cy+hh);g.lineTo(cx+hw,cy);g.lineTo(cx+hw,cy-wallH);g.lineTo(cx,cy+hh-wallH);g.closePath();g.fill();
-  const roof=st.roof||'#3d6e8c', roofD=shade(roof,-26), ry=cy-wallH, ov=(st.ov||9)*z, ridge=(st.rh||16)*z;
+  const roof=st.roof||'#3d6e8c', roofD=shade(roof,-26), ry=cy-wallH, ov=(st.ov||9)*z*0.62, ridge=(st.rh||16)*z;
   if(st.flat||st.factoryRoof||st.glassTower){ // flat cap
     g.fillStyle=night>0.3?shade(roof,-Math.round(night*20)):roof;
     g.beginPath();g.moveTo(cx,ry-hh);g.lineTo(cx+hw,ry);g.lineTo(cx,ry+hh);g.lineTo(cx-hw,ry);g.closePath();g.fill();
@@ -2101,7 +2203,7 @@ function drawZoneBuilding(g,cx,cy,z,c){ if(c.dev<=0){ drawLot(g,cx,cy,z,c.zone);
     if(c.zone===ZC){ drawStallP(g,cx,cy,z,st); mark(); return; }
     if(c.zone===ZI){ drawGranaryP(g,cx,cy,z,st); mark(); return; } }
   if(st.stall){ drawStall(g,cx,cy,z,st); if(c.own){ g.fillStyle=c.own===CLIENT?'#14f195':'#ff7a3d'; g.fillRect(cx-1.4*z,cy-16*z,2.8*z,2.8*z); } if(c.blight){g.fillStyle='rgba(60,40,20,'+(0.12*c.blight)+')';diamondPath(g,cx,cy,z);g.fill();} return; }
-  if(LOD) drawBuildingLOD(g,cx,cy,z,st); else drawBuilding(g,cx,cy,z,st);
+  if(LOD) drawBuildingLOD(g,cx,cy,z,st); else { st.wear=Math.min(1,(c.blight||0)/3); drawBuilding(g,cx,cy,z,st); }
   if(c.own){ g.fillStyle=c.own===CLIENT?'#14f195':'#ff7a3d'; g.fillRect(cx-1.4*z,cy-(st.h+st.rh+6)*z,2.8*z,2.8*z); }
   if(c.blight){ g.fillStyle='rgba(60,40,20,'+(0.12*c.blight)+')'; diamondPath(g,cx,cy,z); g.fill(); }
 }
@@ -2720,15 +2822,15 @@ function compositeSoftGround(tg){ tg=tg||ctx; const w=cv.width,h=cv.height;
   // as zoom drops below LOD_Z so the far view dissolves into painted fields, not facets.
   const farT=Math.max(0,Math.min(1,(LOD_Z-cam.zoom)/LOD_Z)); // 0 at/above LOD_Z, ->1 as zoom shrinks further
   tg.save(); tg.setTransform(1,0,0,1,0,0); tg.imageSmoothingEnabled=true; tg.imageSmoothingQuality='high';
-  if(S.era<=4){   // watercolor ages: facets dissolved into soft painted fields, grid still readable
-    tg.globalAlpha=1.00; tg.drawImage(gB2,0,0,w,h);   // soft base
-    // TONED DOWN at extreme zoom-out: gB3/gB4 are heavily downscaled-then-upscaled, so their
-    // low-frequency blotches read as discrete puffy clouds rather than painterly texture once
-    // their alpha climbs toward its old ceiling (0.92 / 0.55) at far zoom. Lowered ceilings +
-    // gentler farT ramp keep the watercolor-bleed softening without the cloud-bank look.
-    tg.globalAlpha=Math.min(0.74,0.62+farT*0.12); tg.drawImage(gB3,0,0,w,h);   // watercolor bleed
-    tg.globalAlpha=Math.min(0.32,0.18+farT*0.14); tg.drawImage(gB4,0,0,w,h);   // atmospheric halo — grows with distance, capped well below solid coverage
-    tg.globalAlpha=Math.max(0.10,0.20-farT*0.10); tg.drawImage(gBuf,0,0,w,h);  // whisper of crisp detail — fades out as the view pulls back, but never vanishes entirely so far-zoom retains some real texture
+  if(S.era<=4){   // watercolor ages: facets MELTED into smooth painted fields
+    tg.globalAlpha=1.00; tg.drawImage(gB2,0,0,w,h);   // soft base (0.62 scale)
+    // Heavier watercolor-bleed (0.32-scale, blurry enough to dissolve the diamond grid) carries
+    // most of the surface now, and the crisp per-tile layer is reduced to a whisper — so flat
+    // ground reads as one continuous painted field instead of a facetted tile mosaic. Held
+    // roughly flat across zoom (not climbing with farT) to avoid the puffy-cloud look far out.
+    tg.globalAlpha=0.80; tg.drawImage(gB3,0,0,w,h);   // watercolor bleed — melts facets
+    tg.globalAlpha=Math.min(0.30,0.20+farT*0.10); tg.drawImage(gB4,0,0,w,h);   // atmospheric halo
+    tg.globalAlpha=Math.max(0.04,0.07-farT*0.03); tg.drawImage(gBuf,0,0,w,h);  // faint crisp whisper only
   } else {        // later ages stay crisp
     tg.globalAlpha=1.00; tg.drawImage(gBuf,0,0,w,h);
     if(farT>0){ tg.globalAlpha=farT*0.5; tg.drawImage(gB3,0,0,w,h); } // still soften the silhouette at a distance even in crisp ages
@@ -3031,6 +3133,36 @@ function computeSmoothShoreline(z){
   _smoothShoreline=sm; _smoothShorelineKey=key;
   return sm;
 }
+// TIGHT ground clip — a smooth curve that hugs the actual tile footprint (NOT the +1-tile
+// outward wash curve from computeSmoothShoreline). Used to confine every per-tile diamond fill
+// so the GREEN ground ends on a clean organic edge instead of a staircase of protruding diamond
+// tips. The brown coastal wash (painted earlier, to the outer curve) keeps its margin beyond
+// this, so the visible green->brown coast is one smooth surface with no blocky tiles. Pure
+// Laplacian relaxation of the corner ring shaves the single-tile teeth into a mean line; a small
+// centroid-outward pad keeps legitimate green from being eaten while still cutting the tips.
+let _groundClip=null,_groundClipKey='';
+function computeGroundClip(z){
+  const key=gridVersion+'_'+z.toFixed(4)+'_'+VW+'x'+VH+'_'+cam.x.toFixed(1)+'_'+cam.y.toFixed(1);
+  if(_groundClip&&_groundClipKey===key) return _groundClip;
+  if(_shoreRingsVer!==gridVersion) buildShoreRings();
+  if(!_shoreRings||!_shoreRings.length){ _groundClip=null; _groundClipKey=key; return null; }
+  let mainRing=_shoreRings[0]; for(const r of _shoreRings) if(r.length>mainRing.length) mainRing=r;
+  const N=mainRing.length;
+  let geo=mainRing.map(([tx,ty])=>{ const p=s2(tx,ty); return [p[0],p[1]]; });
+  // relax the tile-corner staircase into a smooth mean line (shaves protruding diamond tips,
+  // fills single-tile notches). Kept modest so headlands don't collapse inward.
+  for(let pass=0;pass<7;pass++){ const nx=[];
+    for(let i=0;i<N;i++){ const p0=geo[(i-1+N)%N],p1=geo[i],p2=geo[(i+1)%N];
+      nx.push([(p0[0]+p1[0]*2+p2[0])/4,(p0[1]+p1[1]*2+p2[1])/4]); }
+    geo=nx; }
+  // small outward pad along the centroid normal: restores most of the green the relaxation
+  // pulled in, so we trim the staircase without visibly shrinking the island.
+  let cx=0,cy=0; for(const p of geo){ cx+=p[0]; cy+=p[1]; } cx/=N; cy/=N;
+  const pad=TW*z*0.18;
+  const out=geo.map(p=>{ const dx=p[0]-cx,dy=p[1]-cy,L=Math.hypot(dx,dy)||1;
+    return [p[0]+dx/L*pad, p[1]+dy/L*pad]; });
+  _groundClip=out; _groundClipKey=key; return out;
+}
 // Segment-intersection test (returns true if segment p1-p2 crosses p3-p4).
 function _segsCross(p1,p2,p3,p4){
   const d1x=p2[0]-p1[0], d1y=p2[1]-p1[1], d2x=p4[0]-p3[0], d2y=p4[1]-p3[1];
@@ -3071,6 +3203,19 @@ function removeLocalLoops(pts){
   }
   return out;
 }
+// Even-odd point-in-polygon test against a screen-space loop [[x,y],...]. Used to cull trees
+// whose tile centre falls OUTSIDE the smooth shoreline curve — those tiles have their ground
+// clipped away by clipGroundToShoreline (the curve dips inside the tile in tight bays / on thin
+// spits), so a tree drawn there would hover over the bare void. Center-in-poll keeps every tree
+// that still has ground under it and drops only the genuine floaters.
+function _ptInPoly(x,y,poly){
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i][0],yi=poly[i][1],xj=poly[j][0],yj=poly[j][1];
+    if(((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/((yj-yi)||1e-9)+xi)) inside=!inside;
+  }
+  return inside;
+}
 // Clips everything already painted into the ground buffer (every per-tile diamond fill drawn
 // by drawTerrain) down to the smooth organic curve from computeSmoothShoreline. This is what
 // actually removes the tile staircase from the visible silhouette — painting a soft wash
@@ -3098,7 +3243,6 @@ function clipGroundToShoreline(g,z){
 function paintShorelineMass(g,z){
   if(_shoreRingsVer!==gridVersion) buildShoreRings();
   if(!_shoreRings||!_shoreRings.length)return;
-  const drop=Math.max(TW,TH)*z*0.40;   // short, soft dissolve — no deep glacial cliff
   g.save();
   let mainRing=_shoreRings[0]; for(const r of _shoreRings) if(r.length>mainRing.length) mainRing=r;
   for(const ring of _shoreRings){
@@ -3113,44 +3257,30 @@ function paintShorelineMass(g,z){
     // simply dissolves — an isometric island has its underbelly toward the viewer, never above.
     let minXs=1e9,maxXs=-1e9,minYs=1e9,maxYs=-1e9;
     for(const p of sm){ if(p[0]<minXs)minXs=p[0]; if(p[0]>maxXs)maxXs=p[0]; if(p[1]<minYs)minYs=p[1]; if(p[1]>maxYs)maxYs=p[1]; }
-    const smc_x=sm.reduce((s,p)=>s+p[0],0)/sm.length, smc_y=sm.reduce((s,p)=>s+p[1],0)/sm.length;
-    const frontArr=new Array(sm.length); const spanY=(maxYs-smc_y)||1;
-    for(let i=0;i<sm.length;i++){ const dyo=sm[i][1]-smc_y;
-      // viewer-facing weight: 0 along the top arc (melts straight into the void), ramping to 1
-      // along the lower/front arc where the isometric underbelly faces us. Smoothstep ramp (no
-      // spikes) -> a dissolving painted cliff + sparse trailing ink-drips, never protruding crags.
-      let f=dyo/spanY; f=f<=0?0:(f>=1?1:f*f*(3-2*f)); frontArr[i]=f; }
 
     // LAYER 2 — watercolor wash body: luminous desaturated stone at the lit top, pooling to a
     // deeper pigment base. Replaces the old flat slab so the mass reads as washed paper, not a
     // cut-out. Stays near-grayscale (Jomon earthy, muted) per the void colour philosophy.
     const trace=()=>{ g.beginPath(); for(let i=0;i<sm.length;i++){ const[px,py]=sm[i]; if(i===0)g.moveTo(px,py); else g.lineTo(px,py);} g.closePath(); };
     const wash=g.createLinearGradient(0,minYs,0,maxYs);
-    wash.addColorStop(0,'rgba(72,69,63,1)'); wash.addColorStop(0.45,'rgba(56,53,48,1)');
-    wash.addColorStop(0.8,'rgba(40,38,34,1)'); wash.addColorStop(1,'rgba(30,28,26,1)');
+    wash.addColorStop(0,'rgba(108,128,72,1)'); wash.addColorStop(0.45,'rgba(92,112,62,1)');
+    wash.addColorStop(0.72,'rgba(88,62,34,1)'); wash.addColorStop(0.86,'rgba(72,46,20,1)');
+    wash.addColorStop(1,'rgba(50,30,10,1)');
     trace(); g.fillStyle=wash; g.fill();
     // pooled-pigment edge bloom: a fat dark stroke clipped inside the shape darkens only the rim
     g.save(); trace(); g.clip();
-    g.lineWidth=Math.max(6,TW*z*0.5); g.strokeStyle='rgba(20,18,22,0.5)'; trace(); g.stroke();
+    g.lineWidth=Math.max(6,TW*z*0.5); g.strokeStyle='rgba(34,44,24,0.5)'; trace(); g.stroke();
     // LAYER 2b — granulation flecks (seeded, gravity-weighted to the base) for the watercolour tell
-    g.fillStyle='rgba(24,22,26,0.5)'; const bw=maxXs-minXs, bh=maxYs-minYs, flecks=Math.min(260,Math.max(60,(bw*bh)/900|0));
+    g.fillStyle='rgba(40,52,28,0.5)'; const bw=maxXs-minXs, bh=maxYs-minYs, flecks=Math.min(260,Math.max(60,(bw*bh)/900|0));
     for(let f=0;f<flecks;f++){ const u=vhash(seedBase,f*1.7+3), v=Math.pow(vhash(seedBase,f*2.9+8),0.6);
       const fx2=minXs+u*bw, fy2=minYs+v*bh, r=(0.5+vhash(seedBase,f*3.3+5)*1.3)*z;
       g.globalAlpha=0.10+0.22*vhash(seedBase,f*4.1+1); g.beginPath(); g.arc(fx2,fy2,r,0,7); g.fill(); }
     g.globalAlpha=1; g.restore();
 
-    // SOFT DISSOLVE: a short, smooth feather drops the lower/front arc into the void — no crags,
-    // no drips, no torn spikes, no dark shard-shadows. The island simply melts into darkness.
-    g.beginPath(); const lo=[];
-    for(let i=0;i<sm.length;i++){ const[px,py]=sm[i]; const ff=frontArr[i];
-      lo.push([px, py+drop*ff]);
-      if(i===0)g.moveTo(px,py); else g.lineTo(px,py); }
-    for(let i=lo.length-1;i>=0;i--) g.lineTo(lo[i][0],lo[i][1]);
-    g.closePath();
-    let minY=1e9,maxY=-1e9; for(const[,py]of sm){ if(py<minY)minY=py; if(py>maxY)maxY=py; }
-    const cg=g.createLinearGradient(0,minY,0,maxY+drop);
-    cg.addColorStop(0,'rgba(8,7,14,0.5)'); cg.addColorStop(0.6,'rgba(5,4,10,0.2)'); cg.addColorStop(1,'rgba(3,2,7,0)');
-    g.fillStyle=cg; g.fill();
+    // DIRECTIONAL UNDERSIDE has moved to paintUndersideCrags(), which runs AFTER
+    // clipGroundToShoreline so its hanging crags are not clipped to the island footprint
+    // (the bug that left only stubs reading as blocks ON the surface). Here we keep only the
+    // in-footprint wash body + the brushed silhouette stroke.
 
     // single thin, uniform sumi-e silhouette — soft and brushed, never a hard staircase outline.
     g.lineWidth=1.1*z; g.lineCap='round';
@@ -3161,6 +3291,282 @@ function paintShorelineMass(g,z){
   }
   g.restore();
 }
+/* HANGING UNDERSIDE — drawn into the FINAL world buffer AFTER the ground has been clipped to
+   the island silhouette, so these crags hang freely below the bottom/front edge into the void.
+   Anchored to FIXED shore TILES (not the zoom-dependent smooth-shoreline sample array), so the
+   crags stay locked to the same island locations at every zoom and never reshuffle. Only tiles
+   whose SW (ty+1) or SE (tx+1) face meets the void qualify — those are the viewer-facing lower
+   silhouette; back-edge tiles meet void on their NE/NW faces instead and get nothing, so the
+   top/back simply dissolves. Each crag's SHAPE is seeded by (tx,ty) -> identical across zooms;
+   only its screen position scales. Pure presentation; runs in screen space. */
+function paintUndersideCrags(g,z){
+  if(_shoreRingsVer!==gridVersion) buildShoreRings();
+  const hw=TW/2*z, hh=TH/2*z, M=Math.max(TW,TH)*z;
+  g.save(); g.setTransform(1,0,0,1,0,0);
+  // island vertical screen bounds (from all shore tiles) -> a lower-half threshold so crags
+  // only ever hang from the FRONT/LOWER silhouette; the top/back half stays perfectly clean.
+  let bodyMinY=1e9, bodyMaxY=-1e9;
+  for(let ty=0;ty<H;ty++)for(let tx=0;tx<W;tx++){ const c=grid[ty][tx];
+    if(c.ter===WATER||!c.shore)continue; const sy=cam.y+(tx+ty)*(TH/2)*z;
+    if(sy<bodyMinY)bodyMinY=sy; if(sy>bodyMaxY)bodyMaxY=sy; }
+  const lowerGate=bodyMinY+(bodyMaxY-bodyMinY)*0.46;   // keep only the lower ~54% of the island
+  // gather qualifying front-edge tiles (stable per-tile gate -> clustered, not a dense fence)
+  const fronts=[];
+  for(let ty=0;ty<H;ty++)for(let tx=0;tx<W;tx++){
+    const c=grid[ty][tx];
+    if(c.ter===WATER || !c.shore) continue;
+    // The tile DIRECTLY BELOW on screen is (tx+1,ty+1) (screen-down = +tx,+ty). Only hang crags
+    // where that is void — i.e. the genuine lower/front silhouette with open void beneath.
+    if(!isVoidFace(tx+1,ty+1)) continue;
+    const[ccx,ccy]=s2(tx,ty);
+    const by=ccy+hh;
+    if(by < lowerGate) continue;                                 // suppress the entire upper/back half
+    if(vhash(tx*0.137+3.1, ty*0.291+7.3) > 0.45) continue;       // ~45% kept, tile-stable
+    if(ccx<-M*3||ccx>VW+M*3||ccy<-M*3||ccy>VH+M*8) continue;
+    fronts.push({tx,ty, bx:ccx, by, s:vhash(tx*1.7+1, ty*2.3+2)});  // anchor at tile's bottom corner
+  }
+  // depth order: farther (higher on screen) first, so nearer crags overlap correctly
+  fronts.sort((a,b)=>a.by-b.by);
+
+  for(const ft of fronts){
+    const {bx,by,s}=ft;
+    const depth=M*(0.7+1.7*s);
+    // 1) local soft contact shadow hanging just under this edge tile, fading to void
+    const cg=g.createLinearGradient(0,by-hh*0.4,0,by+depth);
+    cg.addColorStop(0,'rgba(14,18,8,0)'); cg.addColorStop(0.3,'rgba(14,18,8,0.34)');
+    cg.addColorStop(0.75,'rgba(8,11,5,0.16)'); cg.addColorStop(1,'rgba(4,6,3,0)');
+    g.fillStyle=cg; g.beginPath();
+    g.ellipse(bx, by+depth*0.32, hw*1.25, depth*0.42, 0, 0, 7); g.fill();
+
+    // 2) jagged rocky stalactites hanging straight down into the void
+    const spires=2+((s*3)|0);                        // 2-4 sub-spires per cluster
+    for(let k=0;k<spires;k++){
+      const fo=vhash(s,k*17.3+1);
+      const ox=(fo*2-1)*hw*0.8;
+      const oy=vhash(s,k*13.1+4)*hh*0.5;
+      const fw=hw*(0.22+0.34*vhash(s,k*11.3+9));
+      const fd=depth*(0.5+0.55*vhash(s,k*9.7+4));
+      const ax=bx+ox, ay=by+oy;                      // attaches AT the bottom edge, hangs DOWN
+      g.beginPath();
+      g.moveTo(ax-fw, ay);
+      const lx1=ax-fw*(0.8+0.18*vhash(s,k*23+5)), ly1=ay+fd*0.28;
+      const lx2=ax-fw*(0.4+0.2*vhash(s,k*29+6)),  ly2=ay+fd*0.66;
+      const tipX=ax+(vhash(s,k*37+7)*2-1)*fw*0.5,  tipY=ay+fd;
+      const rx2=ax+fw*(0.4+0.2*vhash(s,k*41+8)),   ry2=ay+fd*0.66;
+      const rx1=ax+fw*(0.8+0.18*vhash(s,k*47+9)),  ry1=ay+fd*0.28;
+      g.bezierCurveTo(lx1,ly1,lx2,ly2,tipX,tipY);
+      g.bezierCurveTo(rx2,ry2,rx1,ry1,ax+fw,ay);
+      g.closePath();
+      const ig=g.createLinearGradient(0,ay,0,ay+fd);
+      ig.addColorStop(0,'rgba(40,46,26,0.92)'); ig.addColorStop(0.45,'rgba(24,30,16,0.6)'); ig.addColorStop(0.8,'rgba(12,16,8,0.28)'); ig.addColorStop(1,'rgba(6,8,4,0)');
+      g.fillStyle=ig; g.globalAlpha=0.65+0.3*vhash(s,k*53+2); g.fill();
+      // jagged fracture seam for stony texture
+      g.strokeStyle='rgba(8,12,4,0.4)'; g.lineWidth=0.6*z; g.lineCap='round';
+      g.beginPath(); g.moveTo(ax+(vhash(s,k*61+1)*2-1)*fw*0.3, ay+fd*0.1);
+      g.lineTo(ax+(vhash(s,k*67+2)*2-1)*fw*0.25, ay+fd*0.55);
+      g.lineTo(tipX, ay+fd*0.92); g.stroke();
+      // faint cool moon-rim catch on the spire's upper-left
+      g.strokeStyle='rgba(150,168,120,0.16)'; g.lineWidth=0.8*z;
+      g.beginPath(); g.moveTo(ax-fw*0.7,ay+fd*0.04); g.bezierCurveTo(lx1,ly1,lx2,ly2,tipX,tipY); g.stroke();
+    }
+    g.globalAlpha=1;
+  }
+  g.restore();
+}
+/* FLOATING-ISLAND CLIFF (Master Spec §10) — one continuous painterly earth-rock wall hung from
+   the smooth outer shoreline curve, replacing the old jagged per-tile stalactite crags. The wall
+   thickness is driven by each sample's OUTWARD-NORMAL vertical component, so it only grows on the
+   front/lower silhouette (normal points toward the viewer, +y) and tapers smoothly to nothing on
+   the side flanks and back, where the edge simply dissolves — isometrically correct for a slab of
+   land seen from above. Painted as vertical watercolour ribbon strips so it fades cleanly into the
+   void at the bottom regardless of local height, with sumi-e strata seams, granulation flecks, a
+   light-catching soil lip, and a soft contour — the locked 3-layer style. Screen-space, drawn into
+   the world buffer AFTER the ground composite, so it hangs freely below the clipped island edge. */
+function paintIslandCliff(g,z){
+  const sm=computeSmoothShoreline(z);
+  if(!sm||sm.length<8)return;
+  const N=sm.length;
+  // winding sign of the smoothed screen-space curve (y grows downward) -> consistent outward normal
+  let shoelace=0; for(let i=0;i<N;i++){ const a=sm[i],b=sm[(i+1)%N]; shoelace+=a[0]*b[1]-b[0]*a[1]; }
+  const cw=shoelace<0;
+  // Pan-invariant detail seed from the main ring's TILE coordinates. The old seed read sm[0],
+  // which is a SCREEN point — it shifts every time the camera pans, so the seed (and therefore
+  // every seeded fracture, granulation fleck, strata dry-brush gap and moss dab) was reshuffled
+  // on each frame while moving the map, making the whole rim shimmer/jiggle. Tile coords are fixed
+  // in world space, so the cliff detail now stays locked to the coastline across pans. (Matches the
+  // seedBase used by computeSmoothShoreline / paintShorelineMass.)
+  let _mr=(_shoreRings&&_shoreRings.length)?_shoreRings[0]:null;
+  if(_mr) for(const r of _shoreRings) if(r.length>_mr.length) _mr=r;
+  const seed=_mr ? ((_mr[0][0]*7+_mr[0][1]*13)%97)/97 : 0.371;
+  const baseH=Math.max(9, TH*z*1.62);           // cliff drop on the fully front-facing edge — deeper slab so the island reads as a floating mass, not a thin rim ribbon
+  // per-sample geometry: outward normal, front factor, organic (low-freq, non-jagged) wall height
+  const nrm=[], hgt=[], curv=[];
+  for(let i=0;i<N;i++){
+    const a=sm[(i-1+N)%N], b=sm[(i+1)%N];
+    let tx=b[0]-a[0], ty=b[1]-a[1]; const L=Math.hypot(tx,ty)||1e-4; tx/=L; ty/=L;
+    const nx=cw?-ty:ty, ny=cw?tx:-tx;            // outward normal — same rotation as computeSmoothShoreline
+    let f=(ny-0.03)/0.52; f=Math.max(0,Math.min(1,f)); f=f*f*(3-2*f);   // front-face smoothstep gate
+    const u=i/N;                                  // smooth large-scale undulation so the underbelly waves gently
+    const w1=vhash(seed,Math.floor(u*7)*1.3+2)*2-1, w2=vhash(seed,Math.floor(u*7)*1.3+3.3)*2-1;
+    const wave=w1+(w2-w1)*((u*7)%1);
+    // signed curvature (cross of incoming/outgoing unit tangents): +convex headland bulging
+    // outward, -concave recess. Drives the buttress light/shadow and where the deep separating
+    // crevices fall, so the flat curtain reads as a run of rounded rock masses.
+    const pc=sm[i];
+    let t1x=pc[0]-a[0],t1y=pc[1]-a[1]; const l1=Math.hypot(t1x,t1y)||1e-4; t1x/=l1; t1y/=l1;
+    let t2x=b[0]-pc[0],t2y=b[1]-pc[1]; const l2=Math.hypot(t2x,t2y)||1e-4; t2x/=l2; t2y/=l2;
+    let cr=t1x*t2y-t1y*t2x; if(cw)cr=-cr;
+    nrm.push([nx,ny]); hgt.push(baseH*f*(0.74+0.40*(wave*0.5+0.5))); curv.push(cr);
+  }
+  // smooth curvature a touch so buttresses read as broad rounded masses, not per-sample noise
+  { const c2=curv.slice(); for(let i=0;i<N;i++){ const p=curv[(i-1+N)%N],q=curv[i],r=curv[(i+1)%N]; c2[i]=(p+q*2+r)/4; } for(let i=0;i<N;i++)curv[i]=c2[i]; }
+  g.save(); g.setTransform(1,0,0,1,0,0); g.lineJoin='round'; g.lineCap='round';
+  const drift=h0=>0;  // (placeholder kept minimal — wall drops vertically; perspective drift below)
+  const botPt=i=>[ sm[i][0]+nrm[i][0]*hgt[i]*0.10, sm[i][1]+hgt[i] ];   // slight outward lean for depth
+  // ---- LAYER 2 (watercolour wash): each front strip filled top->void with an earth-rock gradient.
+  // Two modulations stack on the base earth tone: (1) a seeded low-frequency warm/cool walk along
+  // the wall length so it reads as varied strata rather than one slab; (2) DIRECTIONAL isometric
+  // light from the per-strip outward-normal — faces turned toward the upper-left moon (normal points
+  // left, nax<0) catch a cool, lifted highlight; faces turned away (right/SE, nax>0) sink into warm
+  // shadow. That facing-based value split is what makes the rim read as a solid 3-D slab edge with
+  // real volume instead of a flat brown band. The dissolve tail is long and low-opacity so the wall
+  // melts into the void (Master Spec §10) rather than stopping on a hard line.
+  const RGB=(r,g2,b,a)=>'rgba('+(r|0)+','+(g2|0)+','+(b|0)+','+a+')';
+  for(let i=0;i<N;i++){ const j=(i+1)%N; if(hgt[i]<0.6&&hgt[j]<0.6)continue;
+    const A=sm[i], B=sm[j], Ab=botPt(i), Bb=botPt(j);
+    const topY=Math.min(A[1],B[1]), botY=Math.max(Ab[1],Bb[1]);
+    const u=i/N; const t1=vhash(seed,Math.floor(u*9)*1.9+4), t2=vhash(seed,Math.floor(u*9)*1.9+5.9);
+    const tone=(t1+(t2-t1)*((u*9)%1))*2-1;        // -1 cool stone .. +1 warm soil
+    const wm=tone*9;                               // warm/cool red-channel push
+    const cm=tone*6;                               // green follows a little
+    // directional light: nax<0 -> face turned to the upper-left moon (lit), nax>0 -> shadowed
+    const nax=(nrm[i][0]+nrm[j][0])*0.5; const lit=Math.max(-1,Math.min(1,-nax));
+    // buttress volume: convex headlands (cv>0) bulge toward the moon and lift; concave recesses
+    // (cv<0) sink into shadow — this is what turns the flat curtain into rounded rock masses.
+    const cv=Math.max(-1,Math.min(1,(curv[i]+curv[j])*0.5*7));
+    const vd=lit*20 + cv*16;                       // value split: facing + buttress, stronger rounded-rock read
+    const lr=vd, lg=vd+lit*2+cv*2, lb=vd+lit*9+cv*6;    // gentle cool (blue) bias toward lit/convex
+    const wg=g.createLinearGradient(0,topY,0,botY===topY?topY+1:botY);
+    wg.addColorStop(0.00,RGB(116+wm+lr,99+cm+lg,68+lb, 1));     // soil lip just under the grass
+    wg.addColorStop(0.16,RGB(97+wm+lr*0.85, 78+cm+lg*0.85,52+lb*0.85, 1)); // upper earth
+    wg.addColorStop(0.44,RGB(74+wm*0.7+lr*0.6,58+cm*0.6+lg*0.6,40+lb*0.6, 1)); // umber body
+    wg.addColorStop(0.70,RGB(48+wm*0.4+lr*0.38,42+lg*0.38,35+lb*0.38, 0.98));  // cool damp rock
+    wg.addColorStop(0.88,RGB(28,24,28, 0.62));            // shadowed base
+    wg.addColorStop(0.95,RGB(19,16,23, 0.28));            // long fade
+    wg.addColorStop(1.00,RGB(14,12,20, 0));               // dissolves into the void
+    g.fillStyle=wg; g.beginPath(); g.moveTo(A[0],A[1]); g.lineTo(B[0],B[1]); g.lineTo(Bb[0],Bb[1]); g.lineTo(Ab[0],Ab[1]); g.closePath(); g.fill();
+  }
+  // moonlight catch on the convex buttress shoulders — a soft cool sheen on the upper wall of
+  // headlands that bulge toward the upper-left moon, so the rounded rock masses lift out of the
+  // night. Skipped on shadowed/concave samples so recesses stay dark (that contrast IS the volume).
+  for(let i=0;i<N;i++){ const j=(i+1)%N; if(hgt[i]<baseH*0.4||hgt[j]<baseH*0.4)continue;
+    const nax=(nrm[i][0]+nrm[j][0])*0.5; const lit=Math.max(0,-nax);
+    const cvx=Math.max(0,(curv[i]+curv[j])*0.5*7);
+    const m=Math.min(1,lit*cvx*1.7); if(m<0.05)continue;
+    const aB=[sm[i][0]+nrm[i][0]*0.04*hgt[i], sm[i][1]+hgt[i]*0.42];
+    const bB=[sm[j][0]+nrm[j][0]*0.04*hgt[j], sm[j][1]+hgt[j]*0.42];
+    const mg=g.createLinearGradient(0,Math.min(sm[i][1],sm[j][1]),0,Math.max(aB[1],bB[1]));
+    mg.addColorStop(0,'rgba(150,164,152,'+(0.06+0.21*m).toFixed(3)+')');
+    mg.addColorStop(0.5,'rgba(142,156,150,'+(0.03+0.10*m).toFixed(3)+')');
+    mg.addColorStop(1,'rgba(142,156,150,0)');
+    g.fillStyle=mg; g.beginPath(); g.moveTo(sm[i][0],sm[i][1]); g.lineTo(sm[j][0],sm[j][1]);
+    g.lineTo(bB[0],bB[1]); g.lineTo(aB[0],aB[1]); g.closePath(); g.fill();
+  }
+  // band clip path (top forward, bottom back) for strata + granulation that must stay on the wall
+  const band=()=>{ g.beginPath();
+    let started=false; for(let i=0;i<N;i++){ if(hgt[i]<0.6)continue; if(!started){g.moveTo(sm[i][0],sm[i][1]);started=true;} else g.lineTo(sm[i][0],sm[i][1]); }
+    for(let i=N-1;i>=0;i--){ if(hgt[i]<0.6)continue; const p=botPt(i); g.lineTo(p[0],p[1]); }
+    g.closePath(); };
+  g.save(); band(); g.clip();
+  // LAYER 2b — granulation flecks, gravity-weighted toward the damp base (the watercolour tell)
+  let bMinX=1e9,bMaxX=-1e9,bMinY=1e9,bMaxY=-1e9;
+  for(let i=0;i<N;i++){ if(hgt[i]<0.6)continue; const p=botPt(i);
+    bMinX=Math.min(bMinX,sm[i][0],p[0]); bMaxX=Math.max(bMaxX,sm[i][0],p[0]);
+    bMinY=Math.min(bMinY,sm[i][1]); bMaxY=Math.max(bMaxY,p[1]); }
+  if(bMaxX>bMinX){ const bw=bMaxX-bMinX, bh=bMaxY-bMinY, flk=Math.min(360,Math.max(60,(bw*bh)/700|0));
+    g.fillStyle='rgba(28,21,13,0.5)';
+    for(let f=0;f<flk;f++){ const u=vhash(seed,f*1.7+11), v=Math.pow(vhash(seed,f*2.9+5),0.55);
+      const fx=bMinX+u*bw, fy=bMinY+v*bh, r=(0.4+vhash(seed,f*3.3+2)*1.2)*z;
+      g.globalAlpha=0.08+0.20*vhash(seed,f*4.1+7); g.beginPath(); g.arc(fx,fy,r,0,7); g.fill(); }
+    g.globalAlpha=1; }
+  // LAYER 1b — vertical erosion fractures: seeded dry-brush channels running DOWN the wall from
+  // the top lip, each a dark cut paired with a hair lit edge just beside it. These give the rock
+  // face genuine fracture/weathering texture (the "realistic cliff" tell) and break up the smooth
+  // gradient bands into carved stone. Sparse + seeded so they stay anchored across rebuilds; only
+  // on samples with real wall height, deepening with the local drop.
+  // LAYER 1b — erosion fractures, two kinds, IRREGULARLY spaced so the wall reads as weathered
+  // rock rather than a regular palisade: occasional DEEP crevices that bite in at the concave
+  // recesses (separating the buttress masses), plus scattered fine hairline cracks. A low-freq
+  // seeded gate clusters them unevenly instead of seeding every-Nth sample. Each cut is paired
+  // with a hair lit edge just beside it so it reads as a raised rock rib catching the moon.
+  for(let i=0;i<N;i++){ if(hgt[i]<baseH*0.34)continue;
+    const cluster=vhash(seed,Math.floor(i/3)*1.7+31);                      // ~3 samples share a gate -> uneven runs
+    const major = curv[i]<-0.012 && vhash(seed,i*0.91+5)<0.5;              // deep crevice at a concave recess
+    const minor = cluster<0.30 && vhash(seed,i*0.53+13)<0.45;              // scattered hairline crack
+    if(!major&&!minor)continue;
+    const deep = major?(0.55+0.40*vhash(seed,i*1.9+4)):(0.22+0.34*vhash(seed,i*1.9+4));
+    const dep=hgt[i]*deep;
+    const lean=nrm[i][0]*0.12 + (vhash(seed,i*2.7+8)*2-1)*0.06;            // slight outward + jitter, not dead-straight
+    const x0=sm[i][0], y0=sm[i][1];
+    const mx=x0+lean*dep*0.5+(vhash(seed,i*5.1+6)*2-1)*1.6*z, my=y0+dep*0.55;
+    const ex=x0+lean*dep+(vhash(seed,i*7.7+9)*2-1)*1.2*z, ey=y0+dep;       // wandering tip
+    const da=major?(0.40+0.26*vhash(seed,i*3.1+2)):(0.20+0.18*vhash(seed,i*3.1+2));
+    g.strokeStyle='rgba(18,13,10,'+da.toFixed(3)+')';
+    g.lineWidth=((major?1.4:0.6)+0.7*vhash(seed,i*4.3+1))*z; g.beginPath();
+    g.moveTo(x0,y0); g.quadraticCurveTo(mx,my, ex,ey); g.stroke();
+    g.strokeStyle='rgba(156,146,112,'+((major?0.16:0.09)+0.10*vhash(seed,i*6.7+3)).toFixed(3)+')';
+    g.lineWidth=(major?0.9:0.55)*z; g.beginPath();
+    g.moveTo(x0-1.0*z,y0); g.quadraticCurveTo(mx-1.0*z,my, ex-1.0*z,ey); g.stroke();
+  }
+  // sumi-e strata seams — thin broken horizontal ink following the wall at three depths, each
+  // shadowed seam paired with a faint lit ledge just below it so the wall reads as layered rock.
+  for(const[frac,al] of [[0.34,0.34],[0.58,0.27],[0.80,0.20]]){
+    for(const[off,col,wmul] of [[0,'rgba(30,23,14,', 1.0],[0.045,'rgba(150,134,96,', 0.55]]){
+      let pen=false;
+      for(let i=0;i<N;i++){ if(hgt[i]<6){pen=false;continue;}
+        const fr=frac+off;
+        const x=sm[i][0]+nrm[i][0]*hgt[i]*0.10*fr, y=sm[i][1]+hgt[i]*fr;
+        if(vhash(seed,i*0.7+fr*13)>0.82){pen=false;continue;}   // dry-brush gaps
+        if(!pen){ g.beginPath(); g.moveTo(x,y); pen=true; } else g.lineTo(x,y);
+        if(((i+1)%N===0)||hgt[(i+1)%N]<6){ g.strokeStyle=col+(al*wmul).toFixed(3)+')'; g.lineWidth=(0.8+0.5*frac)*z; g.stroke(); pen=false; }
+      }
+      g.strokeStyle=col+(al*wmul).toFixed(3)+')'; g.lineWidth=(0.8+0.5*frac)*z; g.stroke();
+    }
+  }
+  g.restore();
+  // mossy roots spilling just over the top lip — short green dabs where grass meets the wall,
+  // only on the front faces, sparse and seeded so they cling to the same spots every rebuild.
+  for(let i=0;i<N;i++){ if(hgt[i]<baseH*0.45)continue; if(vhash(seed,i*1.3+21)>0.30)continue;
+    const x=sm[i][0], y=sm[i][1], dl=hgt[i]*(0.10+0.16*vhash(seed,i*2.1+6));
+    g.strokeStyle='rgba(86,104,58,'+(0.34+0.18*vhash(seed,i*3.7+2)).toFixed(3)+')'; g.lineWidth=(1.1+0.8*vhash(seed,i*1.9+9))*z; g.lineCap='round';
+    g.beginPath(); g.moveTo(x,y-1*z); g.lineTo(x+nrm[i][0]*dl*0.3,y+dl); g.stroke(); }
+  // LAYER 1 (sumi-e) — soft contour along the hanging underside lip, brushed not hard
+  for(let i=0;i<N;i++){ const j=(i+1)%N; if(hgt[i]<6||hgt[j]<6)continue; const a=botPt(i),b=botPt(j);
+    g.strokeStyle='rgba(22,18,24,'+(0.16+0.12*vhash(seed,i*5+3)).toFixed(3)+')'; g.lineWidth=1.0*z;
+    g.beginPath(); g.moveTo(a[0],a[1]); g.lineTo(b[0],b[1]); g.stroke(); }
+  // crisp contact shadow where the overhanging sod lip meets the rock — a thin dark line a hair
+  // below the top edge so the grass reads as jutting OUT over the wall, not a muddy gradient.
+  for(let i=0;i<N;i++){ const j=(i+1)%N; if(hgt[i]<4&&hgt[j]<4)continue;
+    const sh=Math.min(1,(hgt[i]/baseH)*1.5);
+    g.strokeStyle='rgba(26,20,12,'+(0.34*sh).toFixed(3)+')'; g.lineWidth=2.0*z;
+    g.beginPath(); g.moveTo(sm[i][0]+nrm[i][0]*1.2*z, sm[i][1]+hgt[i]*0.05+1.5*z);
+    g.lineTo(sm[j][0]+nrm[j][0]*1.2*z, sm[j][1]+hgt[j]*0.05+1.5*z); g.stroke(); }
+  // light-catching soil lip where the wall meets the grass — cool moon (upper-left) to warm dusk (lower-right)
+  if(bMaxX>bMinX){ for(let i=0;i<N;i++){ const j=(i+1)%N; if(hgt[i]<4&&hgt[j]<4)continue;
+    const tX=(sm[i][0]-bMinX)/(bMaxX-bMinX||1);
+    const cr=Math.round(150+ tX*16), cg=Math.round(162-tX*34), cb=Math.round(176-tX*92);
+    const f=Math.min(1,(hgt[i]/baseH)*1.4);
+    g.strokeStyle='rgba('+cr+','+cg+','+cb+','+(0.20*f).toFixed(3)+')'; g.lineWidth=1.3*z;
+    g.beginPath(); g.moveTo(sm[i][0],sm[i][1]); g.lineTo(sm[j][0],sm[j][1]); g.stroke(); } }
+  // soft contact glow seating the mass in the void, just beneath the deepest front edge
+  g.globalCompositeOperation='multiply';
+  for(let i=0;i<N;i+=2){ if(hgt[i]<baseH*0.4)continue; const p=botPt(i);
+    const gr=g.createRadialGradient(p[0],p[1],0,p[0],p[1],TH*z*2.0);
+    gr.addColorStop(0,'rgba(8,7,12,0.30)'); gr.addColorStop(1,'rgba(8,7,12,0)');
+    g.fillStyle=gr; g.beginPath(); g.arc(p[0],p[1],TH*z*2.0,0,7); g.fill(); }
+  g.globalCompositeOperation='source-over';
+  g.restore();
+}
 function rebuildWorld(){ const z=cam.zoom;
   { const _P=VOID?AGEPAL[0]:agePal(); TJIT = _P.dry>0.3 ? 0.6 : (_P.wet>=0.9 ? 1.1 : 0.85); }
   ensureGroundBuffers(); ensureWorldBuffer();
@@ -3168,6 +3574,26 @@ function rebuildWorld(){ const z=cam.zoom;
   // ground pass -> offscreen, then blurred into the world buffer
   gctx.setTransform(DPR,0,0,DPR,0,0); gctx.clearRect(0,0,VW,VH);
   paintShorelineMass(gctx,z);
+  // Confine the per-tile ground fills to the TIGHT smooth footprint curve so the green surface
+  // ends on a clean organic edge — the protruding diamond tips that read as "blocky tiles" at
+  // the green/brown coast are clipped away. The brown wash (painted just above, to the wider
+  // outer curve) stays UNCLIPPED beyond this, so the coast remains one continuous painted
+  // surface with no staircase. Restored after the tile loop.
+  const _gc=computeGroundClip(z);
+  gctx.save();
+  if(_gc&&_gc.length>=3){ gctx.beginPath();
+    for(let i=0;i<_gc.length;i++){ const[px,py]=_gc[i]; if(i===0)gctx.moveTo(px,py); else gctx.lineTo(px,py); }
+    gctx.closePath(); gctx.clip();
+    // GREEN SURFACE MASS — fills the coastal VOID-water tiles (which draw nothing in VOID mode and
+    // otherwise let the brown coastal wash show THROUGH the surface as a diamond staircase). With
+    // this, the brown wash reads only as a smooth band OUTSIDE this curve, so the green->brown
+    // coast is one clean surface. Matches the wash's green stops so it blends seamlessly with the
+    // per-tile grass drawn on top. Confined to the clip, so it never bleeds past the smooth edge.
+    let _gmnY=1e9,_gmxY=-1e9; for(const p of _gc){ if(p[1]<_gmnY)_gmnY=p[1]; if(p[1]>_gmxY)_gmxY=p[1]; }
+    const _gg=gctx.createLinearGradient(0,_gmnY,0,_gmxY);
+    _gg.addColorStop(0,'rgb(110,130,74)'); _gg.addColorStop(1,'rgb(92,112,62)');
+    gctx.fillStyle=_gg; gctx.fillRect(0,0,VW,VH);
+  }
   for(let sum=0;sum<=W+H-2;sum++)for(let ty=0;ty<H;ty++){const tx=sum-ty;if(tx<0||tx>=W)continue;
     const c=grid[ty][tx],[cx,cy]=s2(tx,ty);
     if(cx<-TW*z||cx>VW+TW*z||cy<-TH*z*6||cy>VH+TH*z*2)continue;
@@ -3177,12 +3603,19 @@ function rebuildWorld(){ const z=cam.zoom;
     if(S.overlay&&valueGrid&&(c.zone||c.civ)){ diamondPath(gctx,cx,cy,z); gctx.fillStyle=valColor(valueGrid[ty][tx]); gctx.fill(); }
   }
   drawSpiritWaterBody(gctx,z,fx);
+  gctx.restore();
   // Cut every per-tile diamond fill in the ground buffer down to the smooth organic curve
   // computed above. The wash painted by paintShorelineMass already sits just outside this
   // same curve, so the visible coastline is now the curve itself — tile corners no longer
   // peek through past it (Master Spec §10: smooth organic coastline).
   clipGroundToShoreline(gctx,z);
   compositeSoftGround(wctx);
+  // FLOATING-ISLAND CLIFF: one continuous painterly earth-rock wall hung from the smooth outer
+  // shoreline, drawn into the final world buffer below the now-clipped island edge so it falls
+  // freely into the void. Replaces the old jagged per-tile stalactite crags (which read as ugly
+  // artifacts). Thickness is gated by the outward-normal so the wall lives only on the front/lower
+  // silhouette and dissolves on the back/flanks — isometrically correct (Master Spec §10).
+  paintIslandCliff(wctx,z);
   // DISTANT SILHOUETTE: when zoomed out, wrap the whole landmass in one soft ink contour +
   // faint glow so it reads as a single dramatic floating mass rather than a field of tiny
   // tile facets. Traced once from the already-computed shore tiles, drawn under the grain.
@@ -3239,6 +3672,9 @@ function render(){ ctx.setTransform(DPR,0,0,DPR,0,0);
   // tile range and scan only the on-screen anti-diagonal band instead of all W*H tiles.
   // Margins below mirror the per-object cull (cy up to 10 rows above / 2 below; cx 2
   // cols each side) so tall buildings whose anchor sits just off-screen are still caught.
+  // Smooth shoreline curve (cached): trees whose tile centre falls outside it sit over void
+  // (their ground was clipped away by clipGroundToShoreline) and must not be drawn floating.
+  const _shorePoly = computeSmoothShoreline(z);
   { const hx=(TW/2)*z, hy=(TH/2)*z;
     let sLo=Math.floor((-TH*z*10 - cam.y)/hy), sHi=Math.ceil((VH+TH*z*2 - cam.y)/hy);   // tx+ty range
     let dLo=Math.floor((-TW*z*2  - cam.x)/hx), dHi=Math.ceil((VW+TW*z*2 - cam.x)/hx);    // tx-ty range
@@ -3248,7 +3684,10 @@ function render(){ ctx.setTransform(DPR,0,0,DPR,0,0);
       if(txLo<0)txLo=0; if(txHi>W-1)txHi=W-1;
       for(let tx=txLo;tx<=txHi;tx++){ const ty=S-tx; if(ty<0||ty>=H)continue;
         const c=grid[ty][tx];
-        if(c.ter===FOREST&&!occupied(c)&&!c.civ)acts.push({tx,ty,k:'tree',d:S});
+        if(c.ter===FOREST&&!occupied(c)&&!c.civ&&waterNeighbors(tx,ty).deg===0){
+          if(!_shorePoly){ acts.push({tx,ty,k:'tree',d:S}); }
+          else { const[_tcx,_tcy]=s2(tx,ty); if(_ptInPoly(_tcx,_tcy,_shorePoly)) acts.push({tx,ty,k:'tree',d:S}); }
+        }
         if(c.ruin)acts.push({tx,ty,k:'ruin',c,d:S});
         else if(c.zone)acts.push({tx,ty,k:'z',c,d:S});
         if(c.civ===FARM)acts.push({tx,ty,k:'farm',c,d:S});
@@ -3530,6 +3969,13 @@ function syncResidents(){ const homes=[]; for(let y=0;y<H;y++)for(let x=0;x<W;x+
   for(const r of residents){const c=grid[r.home[1]]&&grid[r.home[1]][r.home[0]];
     if(!c||!(c.zone===ZR&&c.dev>0||c.civ===TOWN)){if(homes.length){r.home=homes[(Math.random()*homes.length)|0];r.work=findWork(r.home[0],r.home[1]);r.x=r.home[0];r.y=r.home[1];r.goal='home';}}
     else if(!r.work)r.work=findWork(r.home[0],r.home[1]); } }
+/* free-moving agents (citizens, ronin) step in straight lines toward a goal with no terrain
+   awareness, so they used to wade across the lake/river and trudge through (and visually
+   behind) farm fields. walkBlocked marks those tiles impassable; moveClamp tries the full
+   step, then slides along whichever single axis is clear, so an agent skirts the obstacle
+   instead of stopping dead or cutting through it. */
+function walkBlocked(x,y){ const tx=Math.round(x), ty=Math.round(y); if(!inB(tx,ty))return true; const c=grid[ty][tx]; return c.ter===WATER||c.civ===FARM; }
+function moveClamp(a,nx,ny){ if(!walkBlocked(nx,ny)){a.x=nx;a.y=ny;return;} if(!walkBlocked(nx,a.y)){a.x=nx;return;} if(!walkBlocked(a.x,ny)){a.y=ny;return;} }
 function updateResidents(dt){ const tod=(typeof ENV!=='undefined')?ENV.t:0.4; const dayTime=tod>0.28&&tod<0.78;
   for(const r of residents){ if(r.claimed)continue; if(r.flee>0)r.flee-=dt;
     // ---- nervousness near a passing ronin warband (ambient avoidance, distinct from active-raid flee) ----
@@ -3563,7 +4009,7 @@ function updateResidents(dt){ const tod=(typeof ENV!=='undefined')?ENV.t:0.4; co
           const spot = wantTemple ? nearestTemple(r.home[0],r.home[1]) : nearestWaterEdge(r.home[0],r.home[1]);
           if(!spot)return false; r.leisureSpot=spot; r.leisureAct=wantTemple?'temple':'water'; r.goal='leisure'; r.pause=0; return true; })();
         if(!tookLeisure){ if(dayTime&&r.work)r.goal='out'; } }
-    } else { const v=r.spd*dt*(r.flee>0?2.3:1); r.x+=dx/d*v; r.y+=dy/d*v; r.ph+=dt*8; r.dir=dx-dy<0?-1:1; r.moving=true; r.act='walk'; } } }
+    } else { const v=r.spd*dt*(r.flee>0?2.3:1); moveClamp(r, r.x+dx/d*v, r.y+dy/d*v); r.ph+=dt*8; r.dir=dx-dy<0?-1:1; r.moving=true; r.act='walk'; } } }
 const apparitions=[]; let appTimer=8, disasterT=0, ryuCool=0;
 function tallest(){ let best=null; for(let y=0;y<H;y++)for(let x=0;x<W;x++){const c=grid[y][x]; if(c.dev>=2&&(!best||c.dev>best.dev))best={x,y,dev:c.dev};} return best; }
 function highHealth(){ if(!healthGrid)return null; for(let i=0;i<30;i++){const x=(Math.random()*W)|0,y=(Math.random()*H)|0; if(grid[y][x].dev>0&&healthGrid[y][x])return[x,y];} return null; }
@@ -3757,8 +4203,8 @@ function guardCombatTick(e,d,dt,mob){
     d.target=best>=0?best:null; }
   if(d.target==null) return;
   const tgt=mob[d.target], dx=tgt.x-d.x,dy=tgt.y-d.y,dist=Math.hypot(dx,dy)||1;
-  if(dist>engage){ d.x+=dx/dist*1.5*dt; d.y+=dy/dist*1.5*dt; d.dir=dx<0?-1:1;
-    d.circ=(d.circ||0)+dt*0.6; d.x+=Math.cos(d.circ)*0.18*dt; d.y+=Math.sin(d.circ)*0.10*dt; }   // closing footwork drifts, not a straight beeline
+  if(dist>engage){ d.dir=dx<0?-1:1; d.circ=(d.circ||0)+dt*0.6;
+    moveClamp(d, d.x+dx/dist*1.5*dt+Math.cos(d.circ)*0.18*dt, d.y+dy/dist*1.5*dt+Math.sin(d.circ)*0.10*dt); }   // closing footwork drifts, not a straight beeline
   else { d.dir=dx<0?-1:1; const types=kit.types; d.swingType=types[(Math.random()*types.length)|0];
     d.wind=(0.16+Math.random()*0.10)*kit.windMul; d.windMax=d.wind; d.swingMax=((d.swingType==='thrust')?0.34:0.40)*kit.swingMul; } }
 
@@ -3794,7 +4240,7 @@ function checkMorale(e,group,isRonin){
    The hit is timestamped to the swing itself (fires once, partway through the strike) — combat, not coincidence. */
 function roninCombatTick(e,m,dt,defenders,rtx,rty){
   if(m.state==='down') return;                                                          // dead weight — out of the fight
-  if(m.state==='flee'){ const dx=m.x-rtx,dy=m.y-rty,d=Math.hypot(dx,dy)||1; m.x+=dx/d*m.spd*1.6*dt; m.y+=dy/d*m.spd*1.6*dt; m.dir=dx<0?-1:1; m.ph+=dt*9; return; }
+  if(m.state==='flee'){ const dx=m.x-rtx,dy=m.y-rty,d=Math.hypot(dx,dy)||1; moveClamp(m, m.x+dx/d*m.spd*1.6*dt, m.y+dy/d*m.spd*1.6*dt); m.dir=dx<0?-1:1; m.ph+=dt*9; return; }
   if(m.flinchT>0){ m.flinchT-=dt; if(m.flinchT<=0)m.flinchT=0; return; }                  // staggered by a counter-hit
   if(m.blockT>0){ m.blockT-=dt; if(m.blockT<0)m.blockT=0; }
   if(m.dodgeT>0){ m.dodgeT-=dt; if(m.dodgeT<0)m.dodgeT=0; }
@@ -3828,8 +4274,8 @@ function roninCombatTick(e,m,dt,defenders,rtx,rty){
     if(m.target!=null){ const t=defenders[m.target]; t.engagedBy=(t.engagedBy||0)+1; m._tracked=m.target; } }
   if(m.target==null){ const dx=rtx-m.x,dy=rty-m.y,d=Math.hypot(dx,dy)||1; m.dir=dx<0?-1:1; return; }   // no one left standing — wait for destruct
   const tgt=defenders[m.target], dx=tgt.x-m.x,dy=tgt.y-m.y,d=Math.hypot(dx,dy)||1;
-  if(d>engage){ m.x+=dx/d*m.spd*1.25*dt; m.y+=dy/d*m.spd*1.25*dt; m.dir=dx<0?-1:1; m.ph+=dt*9;
-    m.circ=(m.circ||Math.random()*6.28)+dt*0.7; m.x+=Math.cos(m.circ)*0.2*dt; m.y+=Math.sin(m.circ)*0.11*dt; }          // close the gap, with live footwork drift
+  if(d>engage){ m.circ=(m.circ||Math.random()*6.28)+dt*0.7; m.dir=dx<0?-1:1; m.ph+=dt*9;
+    moveClamp(m, m.x+dx/d*m.spd*1.25*dt+Math.cos(m.circ)*0.2*dt, m.y+dy/d*m.spd*1.25*dt+Math.sin(m.circ)*0.11*dt); }          // close the gap, with live footwork drift
   else { m.dir=dx<0?-1:1; const types=kit.types; m.swingType=types[(Math.random()*types.length)|0];   // varied cuts, no repeating arc — pool drawn from the weapon kit
     m.wind=(0.14+Math.random()*0.10)*kit.windMul; m.windMax=m.wind; m.swingMax=((m.swingType==='thrust')?0.34:(m.swingType==='sweep'?0.42:0.40))*kit.swingMul; tgt.tellSeen=false; } }
 
@@ -4241,13 +4687,29 @@ function drawRonin(g,cx,cy,z,a,dir){ dir=dir||1; z=z*(a.build||1); const ph=a.ph
     g.strokeStyle=shade(robe,-35); g.lineWidth=0.15*z; g.strokeRect(-0.7*z,-0.6*z,1.4*z,1.2*z); g.restore(); }
   g.fillStyle=a.obi||'#3a2230'; g.fillRect(cx-2*z,cy-3.6*z-bob,4*z,1.3*z);                                                            // sash
   g.fillStyle=shade(a.obi||'#3a2230',-20); g.beginPath();g.moveTo(cx+1.8*z,cy-2.3*z-bob);g.lineTo(cx+3.1*z,cy-1.5*z-bob);g.lineTo(cx+2.7*z,cy-0.6*z-bob);g.lineTo(cx+1.5*z,cy-1.2*z-bob);g.closePath();g.fill();   // trailing obi tail, sways loose at the hip
-  g.fillStyle=robe; g.beginPath(); g.moveTo(cx-2.2*z,cy-3.6*z-bob);g.lineTo(cx+2.2*z,cy-3.6*z-bob);g.lineTo(cx+2.4*z,cy-7*z-bob);g.lineTo(cx-2.4*z,cy-7*z-bob);g.closePath();g.fill();      // torso
-  g.fillStyle=shade(skin,-6); g.beginPath();g.moveTo(cx,cy-3.8*z-bob);g.lineTo(cx-1.3*z,cy-7*z-bob);g.lineTo(cx+1.3*z,cy-7*z-bob);g.closePath();g.fill();                                   // open chest
-  g.strokeStyle=shade(skin,-30); g.lineWidth=0.18*z; g.beginPath();g.moveTo(cx-0.2*z,cy-4.4*z-bob);g.lineTo(cx+0.3*z,cy-6.2*z-bob);g.stroke();                                              // old scar across the exposed chest, faint
+  // ---- torso: squared kimono shoulders + a hanging off-sword sleeve, so the top reads as a clothed human rather than a flat trapezoid ----
+  const shY=cy-7*z-bob, shW=2.7*z;                                                                                                    // shoulder line — wider than the waist
+  g.fillStyle=shade(robe,-16); g.beginPath();                                                                                         // off-sword sleeve, hanging open (behind the body)
+    g.moveTo(cx-shW*0.7,cy-6.8*z-bob);g.lineTo(cx-shW-1*z,shY+0.4*z);g.lineTo(cx-shW-0.4*z,cy-3.6*z-bob);g.lineTo(cx-1.4*z,cy-3.6*z-bob);g.closePath();g.fill();
+  g.fillStyle=robe; g.beginPath();                                                                                                    // body
+    g.moveTo(cx-2.2*z,cy-3.6*z-bob);g.lineTo(cx+2.2*z,cy-3.6*z-bob);g.lineTo(cx+shW,shY);
+    g.lineTo(cx+shW*0.5,cy-7.3*z-bob);g.lineTo(cx-shW*0.5,cy-7.3*z-bob);g.lineTo(cx-shW,shY);g.closePath();g.fill();
+  // ---- neck + kimono cross-collar (replaces the oversized bare-chest triangle that read as a downward 'face') ----
+  const hcx=cx, hcy=cy-9.3*z-bob;                                                                                                     // head anchor raised to clear a neck; all headgear below follows hcy
+  g.fillStyle=shade(skin,-16); g.beginPath();g.moveTo(hcx-0.95*z,hcy+1.8*z);g.lineTo(hcx+0.95*z,hcy+1.8*z);g.lineTo(hcx+0.8*z,cy-6.5*z-bob);g.lineTo(hcx-0.8*z,cy-6.5*z-bob);g.closePath();g.fill();   // neck
+  g.fillStyle=shade(skin,-8); g.beginPath();g.moveTo(cx-0.5*z,cy-6.9*z-bob);g.lineTo(cx+0.5*z,cy-6.9*z-bob);g.lineTo(cx+0.26*z,cy-4.6*z-bob);g.lineTo(cx-0.26*z,cy-4.6*z-bob);g.closePath();g.fill();  // narrow exposed throat/chest, a sliver not a slab
+  const colW=0.85*z;
+  g.fillStyle=shade(robe,-18); g.beginPath();                                                                                         // RIGHT collar band (under-lap)
+    g.moveTo(cx+shW*0.5,cy-7.2*z-bob);g.lineTo(cx+shW*0.5-colW,cy-7.2*z-bob);g.lineTo(cx+0.05*z,cy-4.5*z-bob);g.lineTo(cx+0.6*z,cy-4.3*z-bob);g.closePath();g.fill();
+  g.fillStyle=shade(robe,14); g.beginPath();                                                                                          // LEFT collar band (over-lap, catches light)
+    g.moveTo(cx-shW*0.5,cy-7.2*z-bob);g.lineTo(cx-shW*0.5+colW,cy-7.2*z-bob);g.lineTo(cx-0.05*z,cy-4.5*z-bob);g.lineTo(cx-0.6*z,cy-4.3*z-bob);g.closePath();g.fill();
+  g.strokeStyle=shade(robe,-34); g.lineWidth=0.13*z; g.beginPath();g.moveTo(cx-0.6*z,cy-4.3*z-bob);g.lineTo(cx-shW*0.5,cy-7.2*z-bob);g.stroke();   // collar fold shadow
+  g.strokeStyle=shade(skin,-34); g.lineWidth=0.16*z; g.beginPath();g.moveTo(cx-0.05*z,cy-6.6*z-bob);g.lineTo(cx+0.12*z,cy-5.2*z-bob);g.stroke();   // faint old scar on the throat
   if(a.bandage){ g.save();g.translate(cx+(-2*dir)*z,cy-6.2*z-bob);g.rotate(0.3*dir);                                                   // wound wrap on the off-sword forearm — wears the cost of past fights
     g.fillStyle='rgba(214,202,182,0.92)'; g.fillRect(-0.5*z,-1.6*z,1*z,3.2*z);
     g.strokeStyle='rgba(150,40,40,0.4)'; g.lineWidth=0.12*z; g.beginPath();g.moveTo(-0.4*z,-0.6*z);g.lineTo(0.4*z,-0.2*z);g.stroke(); g.restore(); }
-  const hcx=cx,hcy=cy-8.5*z-bob; g.fillStyle=skin; g.beginPath();g.arc(hcx,hcy,2.2*z,0,7);g.fill();                                   // head
+  g.fillStyle=skin; g.beginPath();g.ellipse(hcx,hcy,2.4*z,2.55*z,0,0,7);g.fill();                                                      // head — barely oval; the jaw shadow below supplies the chin taper
+  g.fillStyle=shade(skin,-12); g.beginPath();g.ellipse(hcx-0.1*z,hcy+1.55*z,1.5*z,0.85*z,0,Math.PI*0.05,Math.PI*0.95);g.fill();       // chin / jaw underside shadow
   const hg=a.headgear||'none';
   if(hg==='kasa'){                                                                         // woven straw hat, low over the eyes
     g.fillStyle='#c2a875'; g.beginPath();g.ellipse(hcx,hcy-1.4*z,3.4*z,1.3*z,0,0,7);g.fill();
@@ -4277,7 +4739,21 @@ function drawRonin(g,cx,cy,z,a,dir){ dir=dir||1; z=z*(a.build||1); const ph=a.ph
     g.beginPath();g.moveTo(hcx-1.6*z,hcy-1.2*z);g.lineTo(hcx+0.6*z,hcy+1.3*z);g.stroke(); }
   if(a.armor){ g.fillStyle=shade(robe,-25); g.beginPath();g.moveTo(cx-2.3*z,cy-6.6*z-bob);g.lineTo(cx-0.6*z,cy-7.6*z-bob);g.lineTo(cx-0.6*z,cy-4.6*z-bob);g.lineTo(cx-2.1*z,cy-4.2*z-bob);g.closePath();g.fill();   // single battered shoulder plate, salvaged not matched
     g.strokeStyle=shade(robe,-40); g.lineWidth=0.25*z; g.beginPath();g.moveTo(cx-2*z,cy-6*z-bob);g.lineTo(cx-0.8*z,cy-6.6*z-bob);g.stroke(); }
-  g.fillStyle='rgba(20,10,12,0.5)'; g.fillRect(hcx-1.4*z,hcy-0.2*z,2.8*z,0.7*z);                                                      // shadowed eyes
+  // ---- face: brow, paired eyes, nose, hard-set mouth — reads as a face instead of a single dark bar ----
+  if(hg!=='menpo'){
+    g.strokeStyle='rgba(30,18,16,0.5)'; g.lineWidth=0.5*z; g.lineCap='round';                                                        // brow shadow tucked under the hairline
+    g.beginPath();g.moveTo(hcx-1.45*z,hcy-0.45*z);g.lineTo(hcx-0.2*z,hcy-0.25*z);g.moveTo(hcx+1.45*z,hcy-0.45*z);g.lineTo(hcx+0.2*z,hcy-0.25*z);g.stroke();
+    g.fillStyle='rgba(22,14,14,0.85)';                                                                                                // two narrow eyes — a wary, hardened stare
+    g.beginPath();g.ellipse(hcx-0.85*z,hcy+0.2*z,0.45*z,0.28*z,-0.15,0,7);g.fill();
+    g.beginPath();g.ellipse(hcx+0.85*z,hcy+0.2*z,0.45*z,0.28*z,0.15,0,7);g.fill();
+    g.lineCap='butt'; g.strokeStyle=shade(skin,-30); g.lineWidth=0.17*z;                                                              // nose ridge
+    g.beginPath();g.moveTo(hcx+0.08*z,hcy+0.15*z);g.lineTo(hcx-0.12*z,hcy+1.05*z);g.stroke();
+    g.strokeStyle='rgba(70,44,40,0.45)'; g.lineWidth=0.16*z; g.beginPath();g.moveTo(hcx-0.6*z,hcy+1.6*z);g.lineTo(hcx+0.6*z,hcy+1.6*z);g.stroke();   // mouth, set hard
+  } else {
+    g.fillStyle='rgba(18,9,11,0.6)'; g.fillRect(hcx-1.5*z,hcy-0.5*z,3*z,0.7*z);                                                       // shadowed slit above the iron mask
+    g.save(); g.globalCompositeOperation='lighter'; g.fillStyle='rgba(210,80,50,0.55)';                                              // cold glint of eyes behind the menpo
+    g.beginPath();g.arc(hcx-0.8*z,hcy-0.15*z,0.22*z,0,7);g.fill();g.beginPath();g.arc(hcx+0.8*z,hcy-0.15*z,0.22*z,0,7);g.fill(); g.restore();
+  }
   const bx=cx+(2.4*dir)*z, by=cy-5.4*z-bob;                                                                                            // drawn katana
   if(a.wind>0){                                                                          // ready stance — blade cocked for the coming cut
     g.strokeStyle='#2a2622'; g.lineWidth=0.7*z;
@@ -4775,7 +5251,17 @@ function place(tx,ty){ if(!inB(tx,ty))return; const c=grid[ty][tx]; gridVersion+
     rebuildCoverage(); syncTraffic(); refreshHUD(); playUISfx('build',0.5); return; }
 }
 let dragging=false,dragPan=false,last=null,downPt=null,moved=false,pinched=false; const ptrs=new Map(); let pinch=null;
-function evp(e){const r=cv.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top];}
+function evp(e){const r=cv.getBoundingClientRect();
+  // On portrait phones #gameRoot (and the canvas inside it) is CSS rotate(90deg)'d into
+  // landscape. getBoundingClientRect() gives the correct on-screen box for SIZING, but
+  // clientX/clientY are still in un-rotated screen space, so a raw (clientX-left, clientY-top)
+  // maps taps/drags to the wrong place — which is what made the game unplayable on mobile.
+  // Remap the screen point back into the canvas's own local coordinate frame for a +90° rotation.
+  const gr=document.getElementById('gameRoot');
+  if(gr&&gr.classList.contains('forceLandscape')){
+    return [ e.clientY - r.top, (r.left + r.width) - e.clientX ];
+  }
+  return [e.clientX-r.left,e.clientY-r.top];}
 cv.addEventListener('contextmenu',e=>e.preventDefault());
 cv.addEventListener('pointerdown',e=>{ try{cv.setPointerCapture(e.pointerId);}catch(_){} ptrs.set(e.pointerId,evp(e));
   if(ptrs.size>=2){const p=[...ptrs.values()];pinch={d:Math.hypot(p[0][0]-p[1][0],p[0][1]-p[1][1]),z:cam.zoom,mx:(p[0][0]+p[1][0])/2,my:(p[0][1]+p[1][1])/2};pinched=true;dragging=false;dragPan=false;return;}
